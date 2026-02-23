@@ -14,6 +14,8 @@ $ divan
 
   ? Your question: Should I leave consulting to build a genomics startup?
 
+  ? Template: 🚀  Startup Evaluation
+
   ? Debate rounds: 2 rounds (advisors respond to synthesis)
 
   Generating clarifying questions...
@@ -74,7 +76,7 @@ cp .env.example .env
 # Edit .env with your keys
 ```
 
-Supported providers: Anthropic, OpenAI, Google (Gemini).
+Supported providers: OpenAI, Anthropic, Google (Gemini).
 
 ---
 
@@ -82,7 +84,7 @@ Supported providers: Anthropic, OpenAI, Google (Gemini).
 
 ### Interactive (recommended)
 
-Just run it. The TUI walks you through everything: question, session, advisors, models, debate rounds.
+Just run it. The TUI walks you through everything: question, template, session, advisors, models, debate rounds.
 
 ```bash
 uv run divan
@@ -93,6 +95,9 @@ uv run divan
 ```bash
 # Direct question
 uv run divan "Should I build X?"
+
+# Use a template
+uv run divan --template startup "Should I build X?"
 
 # Pipe from stdin
 echo "Should I build X?" | uv run divan
@@ -115,6 +120,9 @@ uv run divan -c
 # List available personas
 uv run divan --list
 
+# List available templates
+uv run divan --list-templates
+
 # List past sessions
 uv run divan --history
 ```
@@ -125,7 +133,10 @@ uv run divan --history
 
 ```mermaid
 graph LR
-    Q[Your Question] --> CG[Context Gathering]
+    Q[Your Question] --> T{Template?}
+    T --> |yes| CG[Context Gathering]
+    T --> |no| ADV[Advisor Selection]
+    ADV --> CG
     CG --> |clarifying Q&A| R1
 
     subgraph R1[Round 1]
@@ -162,6 +173,61 @@ graph LR
 - **Cross-session memory.** Advisors remember past deliberations. Each advisor retains their own key insights, and all share a verdict history. Memory is managed through the TUI (use/view/disable/clear).
 - **Sessions persist.** Every deliberation is saved as JSONL in `.divan/sessions/`. Continue any session with `-c` or `--session <id>`.
 - **Error visibility.** Failed advisors show red-bordered error panels with clear messages instead of silent empty responses. A post-deliberation summary lists all failures. Bas Vezir is informed about missing advisors.
+
+---
+
+## Templates
+
+Templates are pre-configured advisor compositions for common decision types. Pick one in the TUI or use `--template` from CLI.
+
+| Template | Advisors | Description |
+|----------|----------|-------------|
+| 🚀 Startup Evaluation | Contrarian, Operator, Visionary, Customer, Defterdar | Full council for evaluating startup and product ideas |
+| 🧭 Career Decision | Contrarian, Operator, Visionary | Career decisions, job changes, and professional growth |
+| 🔧 Technical Architecture | Contrarian, Operator, Visionary | Technical architecture, tooling, and engineering decisions |
+
+Templates are YAML files in `templates/`. Add your own:
+
+```yaml
+# templates/investment.yaml
+name: Investment Analysis
+description: Evaluate investment opportunities and financial decisions
+icon: "\U0001F4B0"
+advisors:
+  - contrarian
+  - operator
+  - defterdar
+rounds: 2
+```
+
+When a template is selected, advisor selection, tools, and rounds prompts are skipped (models can still be changed). Use `--list-templates` to see all available templates.
+
+---
+
+## Models
+
+Divan supports three LLM providers. The TUI uses a two-step model picker: choose a provider, then choose a model.
+
+### Supported models
+
+| Provider | Models |
+|----------|--------|
+| **OpenAI** | gpt-5.2, gpt-5.1, gpt-5-mini, o4-mini, o3 |
+| **Anthropic** | Claude Opus 4.6, Claude Sonnet 4.6, Claude Haiku 4.5 |
+| **Google** | Gemini 3.1 Pro Preview, Gemini 3 Pro Preview, Gemini 3 Flash Preview, Gemini 2.5 Pro, Gemini 2.5 Flash |
+
+Model format is `provider:model_name` (e.g., `openai:gpt-5.2`, `anthropic:claude-sonnet-4-6`, `google_genai:gemini-3-flash-preview`). You can also type any custom model string in the TUI or via CLI flags.
+
+### Configuration
+
+All settings can be set via `.env` file with `DIVAN_` prefix, or through the TUI:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `DIVAN_ADVISOR_MODEL` | `openai:gpt-5-mini-2025-08-07` | Model for advisor deliberations |
+| `DIVAN_SYNTHESIS_MODEL` | `openai:gpt-5.1-2025-11-13` | Model for Bas Vezir synthesis |
+| `DIVAN_MAX_TOKENS` | `1500` | Max tokens per advisor response |
+| `DIVAN_SYNTHESIS_MAX_TOKENS` | `2000` | Max tokens for synthesis |
 
 ---
 
@@ -227,21 +293,6 @@ Single-round sessions omit the round headers for a cleaner read.
 
 ---
 
-## Configuration
-
-All settings can be set via `.env` file with `DIVAN_` prefix, or through the TUI:
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `DIVAN_ADVISOR_MODEL` | `openai:gpt-5-mini-2025-08-07` | Model for advisor deliberations |
-| `DIVAN_SYNTHESIS_MODEL` | `openai:gpt-5.1-2025-11-13` | Model for Bas Vezir synthesis |
-| `DIVAN_MAX_TOKENS` | `1500` | Max tokens per advisor response |
-| `DIVAN_SYNTHESIS_MAX_TOKENS` | `2000` | Max tokens for synthesis |
-
-Model format is `provider:model_name`. Supported providers: `anthropic`, `openai`, `google_genai`.
-
----
-
 ## Project Structure
 
 ```
@@ -257,6 +308,7 @@ divan/
   export.py       Polished markdown export
   config.py       Settings (pydantic-settings)
   models.py       Provider-agnostic model factory (reasoning model support)
+  templates.py    Template loader for pre-configured compositions
   engine.py       LangGraph deliberation graph
   tools/
     __init__.py   Tool registry
@@ -269,6 +321,11 @@ personas/
   customer.md     👤  The Customer
   defterdar.md    💰  The Defterdar
   bas_vezir.md    👁  Bas Vezir
+
+templates/
+  startup.yaml    🚀  Startup Evaluation
+  career.yaml     🧭  Career Decision
+  technical.yaml  🔧  Technical Architecture
 
 docs/
   ROADMAP.md      Feature roadmap
@@ -298,6 +355,8 @@ Your signature question: "What are the economic incentives at play here?"
 ```
 
 Divan auto-discovers it on the next run. Set `order` to control display position. The `tools` list is optional; omit it for a tool-free advisor.
+
+You can also create advisors interactively through the TUI. When selecting advisors, choose "+ Create new advisor..." and describe the perspective you want. The LLM generates the full persona file.
 
 ---
 

@@ -25,6 +25,7 @@ from divan.advisor import (
     write_persona_file,
 )
 from divan.config import DivanSettings
+from divan.templates import DivanTemplate, load_all_templates
 from divan.session import (
     Session,
     SessionSummary,
@@ -57,17 +58,35 @@ DIVAN_STYLE = InquirerPyStyle({
     "fuzzy_match": "#e5a00d bold",
 })
 
-ADVISOR_MODELS = [
-    "google_genai:gemini-2.5-flash",
-    "openai:gpt-5-mini-2025-08-07",
-    "anthropic:claude-sonnet-4-6",
-]
+# (display_name, provider:model_id, short_description)
+MODEL_CATALOG: dict[str, list[tuple[str, str, str]]] = {
+    "OpenAI": [
+        ("gpt-5.2", "openai:gpt-5.2", "Latest, most capable"),
+        ("gpt-5.1", "openai:gpt-5.1-2025-11-13", "Strong reasoning"),
+        ("gpt-5-mini", "openai:gpt-5-mini-2025-08-07", "Fast and cheap"),
+        ("o4-mini", "openai:o4-mini", "Reasoning, efficient"),
+        ("o3", "openai:o3", "Reasoning, powerful"),
+    ],
+    "Anthropic": [
+        ("Claude Opus 4.6", "anthropic:claude-opus-4-6", "Most capable"),
+        ("Claude Sonnet 4.6", "anthropic:claude-sonnet-4-6", "Balanced"),
+        ("Claude Haiku 4.5", "anthropic:claude-haiku-4-5", "Fast and cheap"),
+    ],
+    "Google": [
+        ("Gemini 3.1 Pro Preview", "google_genai:gemini-3.1-pro-preview", "Most capable, reasoning"),
+        ("Gemini 3 Pro Preview", "google_genai:gemini-3-pro-preview", "Advanced reasoning"),
+        ("Gemini 3 Flash Preview", "google_genai:gemini-3-flash-preview", "Fast, agentic"),
+        ("Gemini 2.5 Pro", "google_genai:gemini-2.5-pro", "Stable, strong"),
+        ("Gemini 2.5 Flash", "google_genai:gemini-2.5-flash", "Stable, fast and cheap"),
+    ],
+}
 
-SYNTHESIS_MODELS = [
-    "openai:gpt-5.1-2025-11-13",
-    "anthropic:claude-sonnet-4-6",
-    "google_genai:gemini-2.5-flash",
-]
+# Provider display order and prefixes for detection
+_PROVIDER_PREFIXES = {
+    "OpenAI": "openai:",
+    "Anthropic": "anthropic:",
+    "Google": "google_genai:",
+}
 
 
 @dataclass
@@ -169,6 +188,43 @@ def prompt_question() -> str:
     ).execute()
     console.print()
     return question.strip()
+
+
+def prompt_template(templates_dir: str) -> DivanTemplate | None:
+    """Prompt user to select a template or configure manually.
+
+    Returns the selected template, or None for manual configuration.
+    Skips silently if no templates are found.
+    """
+    templates = load_all_templates(templates_dir)
+    if not templates:
+        return None
+
+    choices = [
+        Choice(value="none", name="  No template (configure manually)"),
+        Separator("  ──────────"),
+    ]
+    for t in templates:
+        label = f"  {t.icon}  {t.name}"
+        if t.description:
+            label += f"  [dim]{t.description}[/dim]"
+        choices.append(Choice(value=t.id, name=label))
+
+    result = inquirer.select(
+        message="Template",
+        choices=choices,
+        style=DIVAN_STYLE,
+        pointer="  \u25b8",
+    ).execute()
+    console.print()
+
+    if result == "none":
+        return None
+
+    for t in templates:
+        if t.id == result:
+            return t
+    return None
 
 
 def prompt_session_mode(sessions: list[SessionSummary]) -> Session | None:
@@ -656,31 +712,39 @@ def prompt_rounds() -> int:
     return result
 
 
-def prompt_model(label: str, default: str, presets: list[str]) -> str:
-    """Single-select for model with Custom... option."""
-    choices = []
-    for model in presets:
-        provider, name = model.split(":", 1)
-        tag = " (default)" if model == default else ""
-        choices.append(Choice(
-            value=model,
-            name=f"  {name}{tag}  [dim]{provider}[/dim]" if False else f"  {name}{tag}",
+def _detect_provider(model_spec: str) -> str | None:
+    """Detect provider name from a model spec string."""
+    for provider, prefix in _PROVIDER_PREFIXES.items():
+        if model_spec.startswith(prefix):
+            return provider
+    return None
+
+
+def prompt_model(label: str, default: str) -> str:
+    """Two-step model selection: pick provider, then pick model."""
+    # Step 1: Provider selection
+    default_provider = _detect_provider(default)
+
+    provider_choices = []
+    for provider in MODEL_CATALOG:
+        tag = " (current)" if provider == default_provider else ""
+        provider_choices.append(Choice(
+            value=provider,
+            name=f"  {provider}{tag}",
         ))
-    choices.append(Separator("  ──────────"))
-    choices.append(Choice(value="__custom__", name="  Custom..."))
+    provider_choices.append(Separator("  ──────────"))
+    provider_choices.append(Choice(value="__custom__", name="  Custom..."))
 
-    default_value = default if default in presets else presets[0]
-
-    result = inquirer.select(
-        message=label,
-        choices=choices,
-        default=default_value,
+    provider = inquirer.select(
+        message=f"{label} provider",
+        choices=provider_choices,
+        default=default_provider or list(MODEL_CATALOG.keys())[0],
         style=DIVAN_STYLE,
         pointer="  \u25b8",
     ).execute()
     console.print()
 
-    if result == "__custom__":
+    if provider == "__custom__":
         custom = inquirer.text(
             message=f"{label} (provider:model_name)",
             style=DIVAN_STYLE,
@@ -689,6 +753,41 @@ def prompt_model(label: str, default: str, presets: list[str]) -> str:
         ).execute().strip()
         console.print()
         return custom
+
+    # Step 2: Model selection within provider
+    models = MODEL_CATALOG[provider]
+    model_choices = []
+    for display_name, model_id, description in models:
+        tag = " (current)" if model_id == default else ""
+        model_choices.append(Choice(
+            value=model_id,
+            name=f"  {display_name}{tag}  [dim]{description}[/dim]",
+        ))
+    model_choices.append(Separator("  ──────────"))
+    model_choices.append(Choice(value="__custom__", name="  Custom..."))
+
+    # Pre-select current model if it's in this provider
+    default_model = default if _detect_provider(default) == provider else models[0][1]
+
+    result = inquirer.select(
+        message=f"{label} model",
+        choices=model_choices,
+        default=default_model,
+        style=DIVAN_STYLE,
+        pointer="  \u25b8",
+    ).execute()
+    console.print()
+
+    if result == "__custom__":
+        prefix = _PROVIDER_PREFIXES.get(provider, "")
+        custom = inquirer.text(
+            message=f"Model name (will use {provider})",
+            style=DIVAN_STYLE,
+            validate=lambda val: len(val.strip()) > 0,
+            invalid_message="Model name cannot be empty.",
+        ).execute().strip()
+        console.print()
+        return f"{prefix}{custom}"
 
     return result
 
@@ -700,16 +799,31 @@ def run_interactive_setup(
     skip_advisors: bool = False,
     skip_models: bool = False,
     skip_rounds: bool = False,
+    skip_template: bool = False,
+    template: DivanTemplate | None = None,
 ) -> TUIConfig:
     """Run the full interactive setup flow.
 
     Parameters control which prompts to show (skipped when CLI flags provide values).
+    If a template is provided (via CLI --template), it pre-fills advisors and rounds.
     """
     _print_banner()
 
     # Question
     if question is None:
         question = prompt_question()
+
+    # Template picker (after question, before session)
+    if template is None and not skip_template:
+        template = prompt_template(settings.templates_dir)
+
+    # If template selected, resolve advisor list and rounds
+    template_advisor_ids: list[str] | None = None
+    if template is not None:
+        template_advisor_ids = template.advisors
+        skip_advisors = True
+        if template.rounds is not None:
+            skip_rounds = True
 
     # Session
     session: Session | None = None
@@ -725,57 +839,64 @@ def run_interactive_setup(
     # Advisors
     available = get_advisors(settings.personas_dir)
 
-    # Smart advisor selection: suggest relevant advisors based on question
-    suggested_ids: list[str] | None = None
-    if not skip_advisors and question:
-        try:
-            from divan.advisor_selector import select_advisors
-            from divan.models import create_model
-
-            with console.status("[dim]Analyzing question...[/dim]"):
-                selector_model = create_model(settings.advisor_model, settings, max_tokens=200)
-                suggested_ids = asyncio.run(select_advisors(question, available, selector_model))
-            if suggested_ids and len(suggested_ids) < len(available):
-                suggested_names = ", ".join(
-                    f"{a.icon} {a.name}" for a in available if a.id in suggested_ids
-                )
-                console.print(f"  [dim]Suggested:[/dim] {suggested_names}")
-                console.print()
-        except Exception:
-            suggested_ids = None
-
-    if not skip_advisors:
-        advisors = prompt_advisors(
-            available,
-            personas_dir=settings.personas_dir,
-            advisor_model_spec=settings.advisor_model,
-            settings=settings,
-            suggested_ids=suggested_ids,
-        )
+    if template_advisor_ids is not None:
+        # Filter to template's advisor list, preserving template order
+        advisor_map = {a.id: a for a in available}
+        advisors = [advisor_map[aid] for aid in template_advisor_ids if aid in advisor_map]
+        if not advisors:
+            console.print("[yellow]Warning:[/yellow] Template advisors not found, using all advisors.")
+            advisors = available
     else:
-        advisors = available
+        # Smart advisor selection: suggest relevant advisors based on question
+        suggested_ids: list[str] | None = None
+        if not skip_advisors and question:
+            try:
+                from divan.advisor_selector import select_advisors
+                from divan.models import create_model
 
-    # Tools
-    advisors = prompt_tools(advisors)
+                with console.status("[dim]Analyzing question...[/dim]"):
+                    selector_model = create_model(settings.advisor_model, settings, max_tokens=200)
+                    suggested_ids = asyncio.run(select_advisors(question, available, selector_model))
+                if suggested_ids and len(suggested_ids) < len(available):
+                    suggested_names = ", ".join(
+                        f"{a.icon} {a.name}" for a in available if a.id in suggested_ids
+                    )
+                    console.print(f"  [dim]Suggested:[/dim] {suggested_names}")
+                    console.print()
+            except Exception:
+                suggested_ids = None
+
+        if not skip_advisors:
+            advisors = prompt_advisors(
+                available,
+                personas_dir=settings.personas_dir,
+                advisor_model_spec=settings.advisor_model,
+                settings=settings,
+                suggested_ids=suggested_ids,
+            )
+        else:
+            advisors = available
+
+    # Tools (skip if template selected, use persona defaults)
+    if template is None:
+        advisors = prompt_tools(advisors)
 
     # Models
     if not skip_models:
         advisor_model = prompt_model(
-            "Advisor model",
+            "Advisor",
             settings.advisor_model,
-            ADVISOR_MODELS,
         )
         synthesis_model = prompt_model(
-            "Synthesis model",
+            "Synthesis",
             settings.synthesis_model,
-            SYNTHESIS_MODELS,
         )
     else:
         advisor_model = settings.advisor_model
         synthesis_model = settings.synthesis_model
 
     # Rounds
-    rounds = 1
+    rounds = template.rounds if template and template.rounds else 1
     if not skip_rounds:
         rounds = prompt_rounds()
 

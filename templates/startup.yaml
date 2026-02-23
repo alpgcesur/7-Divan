@@ -1,0 +1,10 @@
+name: Startup Evaluation
+description: Full council for evaluating startup and product ideas
+icon: "\U0001F680"
+advisors:
+  - contrarian
+  - operator
+  - visionary
+  - customer
+  - defterdar
+rounds: 1

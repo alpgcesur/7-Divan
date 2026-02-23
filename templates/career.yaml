@@ -1,0 +1,8 @@
+name: Career Decision
+description: Career decisions, job changes, and professional growth
+icon: "\U0001F9ED"
+advisors:
+  - contrarian
+  - operator
+  - visionary
+rounds: 1

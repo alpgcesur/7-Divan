@@ -1,0 +1,8 @@
+name: Technical Architecture
+description: Technical architecture, tooling, and engineering decisions
+icon: "\U0001F527"
+advisors:
+  - contrarian
+  - operator
+  - visionary
+rounds: 1

@@ -23,6 +23,7 @@ class DivanSettings(BaseSettings):
 
     # Paths
     personas_dir: str = str(Path(__file__).parent.parent / "personas")
+    templates_dir: str = str(Path(__file__).parent.parent / "templates")
 
 
 def get_settings(**overrides: str) -> DivanSettings:

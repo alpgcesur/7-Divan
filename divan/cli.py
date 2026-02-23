@@ -13,6 +13,7 @@ from rich.table import Table
 
 from divan.advisor import Advisor, get_advisors, get_synthesizer, load_all_personas
 from divan.config import get_settings
+from divan.templates import find_template, load_all_templates
 from divan.display import run_deliberation_streaming
 from divan.export import export_session_markdown
 from divan.memory import (
@@ -137,6 +138,8 @@ def _all_flags_set(
 @click.option("--no-tui", is_flag=True, help="Disable interactive TUI menu")
 @click.option("--rounds", "num_rounds", default=None, type=click.IntRange(min=1), help="Number of debate rounds")
 @click.option("--no-context", is_flag=True, help="Skip clarifying questions step")
+@click.option("--template", "template_id", default=None, help="Use a pre-configured template (ID or name)")
+@click.option("--list-templates", is_flag=True, help="List available templates")
 def main(
     question: str | None,
     model_override: str | None,
@@ -150,6 +153,8 @@ def main(
     no_tui: bool,
     num_rounds: int | None,
     no_context: bool,
+    template_id: str | None,
+    list_templates: bool,
 ) -> None:
     """Divan: Personal Advisory Council.
 
@@ -183,6 +188,29 @@ def main(
         console.print(table)
         return
 
+    # Handle --list-templates
+    if list_templates:
+        templates = load_all_templates(settings.templates_dir)
+        if not templates:
+            console.print("[dim]No templates found.[/dim]")
+            return
+
+        table = Table(title="Divan Templates")
+        table.add_column("Icon")
+        table.add_column("ID", style="dim")
+        table.add_column("Name", style="bold")
+        table.add_column("Description")
+        table.add_column("Advisors", style="dim")
+        table.add_column("Rounds", style="dim", justify="center")
+
+        for t in templates:
+            advisors_str = ", ".join(t.advisors)
+            rounds_str = str(t.rounds) if t.rounds else "default"
+            table.add_row(t.icon, t.id, t.name, t.description, advisors_str, rounds_str)
+
+        console.print(table)
+        return
+
     # Handle --history
     if show_history:
         sessions = list_sessions()
@@ -204,6 +232,15 @@ def main(
         console.print(table)
         return
 
+    # Resolve template if provided via CLI
+    cli_template = None
+    if template_id:
+        cli_template = find_template(settings.templates_dir, template_id)
+        if cli_template is None:
+            console.print(f"[red]Error:[/red] Template not found: {template_id}")
+            console.print("Use --list-templates to see available templates.")
+            raise SystemExit(1)
+
     # Determine if we should use interactive TUI
     is_interactive = sys.stdin.isatty() and not no_tui
     has_question = question is not None
@@ -217,9 +254,11 @@ def main(
             question=question,
             settings=settings,
             skip_session=continue_latest or session_id is not None,
-            skip_advisors=advisor_filter is not None,
+            skip_advisors=advisor_filter is not None or cli_template is not None,
             skip_models=model_override is not None,
-            skip_rounds=num_rounds is not None,
+            skip_rounds=num_rounds is not None or (cli_template is not None and cli_template.rounds is not None),
+            skip_template=cli_template is not None,
+            template=cli_template,
         )
 
         question = tui_config.question
@@ -273,6 +312,16 @@ def main(
         # Load advisors
         advisors = get_advisors(settings.personas_dir)
         synthesizer = get_synthesizer(settings.personas_dir)
+
+        # Apply template advisor filter
+        if cli_template:
+            advisor_map = {a.id: a for a in advisors}
+            advisors = [advisor_map[aid] for aid in cli_template.advisors if aid in advisor_map]
+            if not advisors:
+                console.print(f"[red]Error:[/red] No advisors match template: {cli_template.name}")
+                raise SystemExit(1)
+            if cli_template.rounds is not None and num_rounds is None:
+                num_rounds = cli_template.rounds
 
         # Filter advisors if requested
         if advisor_filter:

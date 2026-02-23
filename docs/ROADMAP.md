@@ -1,15 +1,15 @@
 # Divan Roadmap
 
-## Tier 1: Smarter Advisors (Current)
+## Tier 1: Smarter Advisors (Done)
 
-### 1. Tool-Enabled Advisors
+### 1. Tool-Enabled Advisors ✅
 Give advisors tools (web search, file reading, grep, shell commands) so they can ground advice in real information instead of reasoning only from training data. Tools are defined per-persona in frontmatter and managed via the TUI.
 
-### 2. Advisor Memory
+### 2. Advisor Memory ✅
 Advisors remember past deliberations and can reference them. "Last time you asked about X, The Contrarian warned about Y, and that turned out to be right."
 
-### 3. Custom Divan Templates
-Pre-configured advisor compositions for different decision types. `divan --template startup "My idea is..."` loads a startup-focused set of advisors with relevant tools.
+### 3. Custom Divan Templates ✅
+Pre-configured advisor compositions for different decision types. `divan --template startup "My idea is..."` loads a startup-focused set of advisors. Templates are YAML files in `templates/`, with TUI picker and CLI flag support.
 
 ## Tier 2: Better Interface
 
