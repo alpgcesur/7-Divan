@@ -38,13 +38,13 @@ class TestPersonaLoading:
 
     def test_load_all_personas_sorted(self):
         personas = load_all_personas(PERSONAS_DIR)
-        assert len(personas) == 5
+        assert len(personas) == 6  # 5 advisors + 1 synthesizer
         orders = [p.order for p in personas]
         assert orders == sorted(orders)
 
     def test_get_advisors_excludes_synthesizer(self):
         advisors = get_advisors(PERSONAS_DIR)
-        assert len(advisors) == 4
+        assert len(advisors) == 5  # contrarian, operator, visionary, customer, defterdar
         assert all(not a.is_synthesizer for a in advisors)
 
     def test_get_synthesizer(self):

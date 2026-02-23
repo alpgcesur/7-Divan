@@ -1,5 +1,6 @@
 """Advisor model and persona loader."""
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,6 +17,7 @@ class Advisor:
     order: int
     system_prompt: str
     is_synthesizer: bool = False
+    tools: list[str] = field(default_factory=list)
 
     @property
     def node_name(self) -> str:
@@ -47,6 +49,7 @@ def load_persona(filepath: Path) -> Advisor:
         order=frontmatter["order"],
         system_prompt=system_prompt,
         is_synthesizer=frontmatter.get("is_synthesizer", False),
+        tools=frontmatter.get("tools", []),
     )
 
 
@@ -75,3 +78,60 @@ def get_synthesizer(personas_dir: str | Path) -> Advisor:
     if not synthesizers:
         raise ValueError("No synthesizer persona found (needs is_synthesizer: true in frontmatter)")
     return synthesizers[0]
+
+
+def next_advisor_order(personas_dir: str | Path) -> int:
+    """Return max non-synthesizer order + 1. If advisors have orders 1,2,3,4 returns 5."""
+    advisors = get_advisors(personas_dir)
+    if not advisors:
+        return 1
+    return max(a.order for a in advisors) + 1
+
+
+def slugify_name(name: str) -> str:
+    """Convert advisor name to file-safe ID.
+
+    'The Economist' -> 'economist'. Strips 'The ' prefix, lowercases,
+    replaces spaces/hyphens with underscores, removes other special chars.
+    """
+    slug = name.strip()
+    if slug.lower().startswith("the "):
+        slug = slug[4:]
+    slug = slug.strip().lower()
+    slug = re.sub(r"[\s\-]+", "_", slug)
+    slug = re.sub(r"[^\w]", "", slug)
+    return slug
+
+
+def write_persona_file(
+    personas_dir: str | Path,
+    name: str,
+    title: str,
+    icon: str,
+    color: str,
+    order: int,
+    system_prompt: str,
+) -> Path:
+    """Write a persona markdown file with YAML frontmatter + body.
+
+    Returns the path to the written file.
+    """
+    file_id = slugify_name(name)
+    filepath = Path(personas_dir) / f"{file_id}.md"
+
+    frontmatter = {
+        "name": name,
+        "title": title,
+        "icon": icon,
+        "color": color,
+        "order": order,
+    }
+
+    content = "---\n"
+    content += yaml.dump(frontmatter, default_flow_style=False, allow_unicode=True).strip()
+    content += "\n---\n\n"
+    content += system_prompt.strip()
+    content += "\n"
+
+    filepath.write_text(content, encoding="utf-8")
+    return filepath

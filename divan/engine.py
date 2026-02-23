@@ -6,7 +6,8 @@ import operator
 from typing import Annotated, Any, TypedDict
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 
 from divan.advisor import Advisor
@@ -28,17 +29,58 @@ class DivanState(TypedDict):
     synthesis: str
 
 
-def make_advisor_node(advisor: Advisor, model: BaseChatModel):
-    """Create an async graph node for a single advisor."""
+MAX_TOOL_ITERATIONS = 5
+
+
+def make_advisor_node(
+    advisor: Advisor,
+    model: BaseChatModel,
+    tools: list[BaseTool] | None = None,
+):
+    """Create an async graph node for a single advisor.
+
+    If tools are provided, the advisor runs an agentic loop: invoke the model,
+    execute any tool calls, feed results back, repeat until the model responds
+    with plain text or the iteration limit is reached.
+    """
 
     async def advisor_node(state: DivanState) -> dict[str, Any]:
         try:
-            messages = [
+            messages: list = [
                 SystemMessage(content=advisor.system_prompt),
                 HumanMessage(content=state["query"]),
             ]
-            result = await model.ainvoke(messages)
-            response_text = result.content
+
+            if tools:
+                tool_map = {t.name: t for t in tools}
+                model_with_tools = model.bind_tools(tools)
+
+                for _ in range(MAX_TOOL_ITERATIONS):
+                    result = await model_with_tools.ainvoke(messages)
+                    messages.append(result)
+
+                    if not result.tool_calls:
+                        break
+
+                    for tc in result.tool_calls:
+                        tool_fn = tool_map.get(tc["name"])
+                        if tool_fn:
+                            try:
+                                output = await tool_fn.ainvoke(tc["args"])
+                            except Exception as e:
+                                output = f"Tool error: {e}"
+                        else:
+                            output = f"Unknown tool: {tc['name']}"
+
+                        messages.append(ToolMessage(
+                            content=str(output),
+                            tool_call_id=tc["id"],
+                        ))
+
+                response_text = result.content or ""
+            else:
+                result = await model.ainvoke(messages)
+                response_text = result.content
         except Exception as e:
             response_text = f"[Advisor error: {e}]"
 
@@ -94,16 +136,23 @@ def build_deliberation_graph(
     synthesizer: Advisor,
     advisor_model: BaseChatModel,
     synthesis_model: BaseChatModel,
+    advisor_tools: dict[str, list[BaseTool]] | None = None,
 ) -> StateGraph:
     """Build the LangGraph deliberation graph.
 
     Structure: START -> [all advisors in parallel] -> synthesis -> END
+
+    advisor_tools: optional dict mapping advisor ID to list of tool instances.
     """
     graph = StateGraph(DivanState)
 
     # Add advisor nodes
     for advisor in advisors:
-        graph.add_node(advisor.node_name, make_advisor_node(advisor, advisor_model))
+        tools = (advisor_tools or {}).get(advisor.id)
+        graph.add_node(
+            advisor.node_name,
+            make_advisor_node(advisor, advisor_model, tools=tools),
+        )
         graph.add_edge(START, advisor.node_name)
         graph.add_edge(advisor.node_name, synthesizer.node_name)
 

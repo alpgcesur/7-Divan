@@ -11,11 +11,12 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from divan.advisor import get_advisors, get_synthesizer, load_all_personas
+from divan.advisor import Advisor, get_advisors, get_synthesizer, load_all_personas
 from divan.config import get_settings
 from divan.display import run_deliberation_streaming
 from divan.export import export_session_markdown
 from divan.models import create_advisor_model, create_synthesis_model
+from divan.tools import ensure_tools_registered, get_tools_for_advisor
 from divan.session import (
     Session,
     create_session,
@@ -28,6 +29,21 @@ from divan.session import (
 )
 
 console = Console()
+
+
+def _resolve_advisor_tools(advisors: list[Advisor]) -> dict[str, list] | None:
+    """Build a mapping of advisor ID to resolved tool instances.
+
+    Returns None if no advisor has tools configured.
+    """
+    ensure_tools_registered()
+    tools_map = {}
+    for advisor in advisors:
+        if advisor.tools:
+            resolved = get_tools_for_advisor(advisor.tools)
+            if resolved:
+                tools_map[advisor.id] = resolved
+    return tools_map or None
 
 
 def _run_deliberation(
@@ -46,6 +62,9 @@ def _run_deliberation(
     if session:
         save_question(session.id, question)
 
+    # Resolve tools for advisors
+    advisor_tools = _resolve_advisor_tools(advisors)
+
     result = asyncio.run(
         run_deliberation_streaming(
             question=question,
@@ -57,6 +76,7 @@ def _run_deliberation(
             round_num=round_num,
             total_rounds=total_rounds,
             context_pairs=context_pairs,
+            advisor_tools=advisor_tools,
         )
     )
 

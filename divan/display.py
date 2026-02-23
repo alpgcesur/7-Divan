@@ -6,7 +6,8 @@ import asyncio
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import BaseTool
 from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
@@ -22,6 +23,8 @@ from divan.synthesis import build_synthesis_prompt
 
 
 console = Console()
+
+MAX_TOOL_ITERATIONS = 5
 
 
 def render_header(question: str) -> Panel:
@@ -73,6 +76,81 @@ def render_synthesis_panel(content: str, streaming: bool = False) -> Panel:
     )
 
 
+def _format_tool_call(name: str, args: dict) -> str:
+    """Format a tool call for display in the advisor panel."""
+    if name == "web_search":
+        query = args.get("query", "")
+        return f"🔍 Searching: \"{query}\"..."
+    elif name == "read_file":
+        path = args.get("path", "")
+        return f"📄 Reading: {path}..."
+    elif name == "list_files":
+        path = args.get("path", ".")
+        pattern = args.get("pattern", "*")
+        return f"📂 Listing: {path}/{pattern}..."
+    elif name == "grep_search":
+        pattern = args.get("pattern", "")
+        return f"🔎 Grepping: \"{pattern}\"..."
+    elif name == "run_command":
+        cmd = args.get("command", "")
+        return f"⚡ Running: {cmd}..."
+    else:
+        return f"🔧 {name}..."
+
+
+async def _run_advisor_with_tools(
+    advisor: Advisor,
+    messages: list,
+    model: BaseChatModel,
+    tools: list[BaseTool],
+    buffer_ref: dict[str, str],
+) -> None:
+    """Run an advisor with tools using an agentic invoke loop.
+
+    Tool usage lines are appended to the buffer so the display shows progress.
+    The final response text replaces the tool lines.
+    """
+    tool_map = {t.name: t for t in tools}
+    model_with_tools = model.bind_tools(tools)
+    tool_lines: list[str] = []
+
+    for _ in range(MAX_TOOL_ITERATIONS):
+        result = await model_with_tools.ainvoke(messages)
+        messages.append(result)
+
+        if not result.tool_calls:
+            break
+
+        for tc in result.tool_calls:
+            # Show tool usage in buffer
+            display_line = _format_tool_call(tc["name"], tc["args"])
+            tool_lines.append(display_line)
+            buffer_ref[advisor.id] = "\n".join(tool_lines) + "\n"
+
+            # Execute tool
+            tool_fn = tool_map.get(tc["name"])
+            if tool_fn:
+                try:
+                    output = await tool_fn.ainvoke(tc["args"])
+                except Exception as e:
+                    output = f"Tool error: {e}"
+            else:
+                output = f"Unknown tool: {tc['name']}"
+
+            messages.append(ToolMessage(
+                content=str(output),
+                tool_call_id=tc["id"],
+            ))
+
+    # Build final content: tool lines header + response
+    final_content = result.content or ""
+    if tool_lines:
+        tool_header = "\n".join(tool_lines)
+        buffer_ref[advisor.id] = f"{tool_header}\n\n{final_content}"
+    else:
+        buffer_ref[advisor.id] = final_content
+
+
 async def stream_advisor(
     advisor: Advisor,
     question: str,
@@ -104,6 +182,7 @@ async def run_deliberation_streaming(
     round_num: int = 1,
     total_rounds: int = 1,
     context_pairs: list[dict] | None = None,
+    advisor_tools: dict[str, list[BaseTool]] | None = None,
 ) -> dict[str, str]:
     """Run the full deliberation with streaming display.
 
@@ -111,6 +190,10 @@ async def run_deliberation_streaming(
 
     If session is provided, advisors receive their per-advisor history and
     Bas Vezir receives the full deliberation history.
+
+    advisor_tools: optional dict mapping advisor ID to resolved tool instances.
+    Advisors with tools use an invoke loop (no streaming during tool use),
+    advisors without tools stream normally.
     """
     # Build the enriched question with context if provided
     if context_pairs:
@@ -166,12 +249,23 @@ async def run_deliberation_streaming(
         # Add the current question (enriched with context if available)
         messages.append(HumanMessage(content=enriched_question))
 
-        try:
-            async for chunk in advisor_model.astream(messages):
-                if isinstance(chunk, AIMessageChunk) and chunk.content:
-                    buffers[advisor.id] += chunk.content
-        except Exception as e:
-            buffers[advisor.id] += f"\n[Error: {e}]"
+        # Check if this advisor has tools
+        tools = (advisor_tools or {}).get(advisor.id)
+
+        if tools:
+            # Two-phase: invoke loop with tools, no streaming
+            try:
+                await _run_advisor_with_tools(advisor, messages, advisor_model, tools, buffers)
+            except Exception as e:
+                buffers[advisor.id] += f"\n[Error: {e}]"
+        else:
+            # Pure streaming, no tools
+            try:
+                async for chunk in advisor_model.astream(messages):
+                    if isinstance(chunk, AIMessageChunk) and chunk.content:
+                        buffers[advisor.id] += chunk.content
+            except Exception as e:
+                buffers[advisor.id] += f"\n[Error: {e}]"
         completed.add(advisor.id)
 
     with Live(build_display(), console=console, refresh_per_second=8) as live:

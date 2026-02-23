@@ -44,13 +44,14 @@ $ divan
 
 ## The Council
 
-| Advisor | Role | Signature Question |
-|---------|------|--------------------|
-| ⚔️ The Contrarian (Muhalif) | Stress-tests assumptions, finds every flaw | "Why will this fail?" |
-| ⚙️ The Operator (Sadrazam) | Only cares about execution and shipping | "Can you ship a v0.1 this weekend?" |
-| 🔭 The Visionary (Kahin) | Thinks 3-5 years out, connects to trends | "What does this become at scale?" |
-| 👤 The Customer (Musteri) | Role-plays as the potential buyer/user | "Why would I pay for this?" |
-| 👁 Bas Vezir (Grand Vizier) | Synthesizes all perspectives into a verdict | Runs last, sees everything |
+| Advisor | Role | Signature Question | Tools |
+|---------|------|--------------------|-------|
+| ⚔️ The Contrarian (Muhalif) | Stress-tests assumptions, finds every flaw | "Why will this fail?" | web search |
+| ⚙️ The Operator (Sadrazam) | Only cares about execution and shipping | "Can you ship a v0.1 this weekend?" | web search, file reading, grep, shell |
+| 🔭 The Visionary (Kahin) | Thinks 3-5 years out, connects to trends | "What does this become at scale?" | web search |
+| 👤 The Customer (Musteri) | Role-plays as the potential buyer/user | "Why would I pay for this?" | web search |
+| 💰 The Defterdar (Defterdar) | Reduces everything to incentives and cash flows | "What are the unit economics?" | web search |
+| 👁 Bas Vezir (Grand Vizier) | Synthesizes all perspectives into a verdict | Runs last, sees everything | none |
 
 Each advisor is a standalone markdown file in `personas/`. Drop a new `.md` file in that directory and Divan auto-discovers it.
 
@@ -157,7 +158,33 @@ graph LR
 - **Debate rounds.** In round 2+, each advisor also sees Bas Vezir's previous synthesis, so they can respond to the overall picture without seeing each other directly.
 - **Context gathering.** Before deliberation, an LLM generates 2-3 clarifying questions. Your answers become structured context that all advisors receive.
 - **Streaming is mandatory.** The watching-them-think experience is core to how Divan feels.
+- **Tool-enabled advisors.** Advisors can use tools (web search, file reading, grep, shell commands) to ground their advice in real data. Tool usage is shown inline before the response.
 - **Sessions persist.** Every deliberation is saved as JSONL in `.divan/sessions/`. Continue any session with `-c` or `--session <id>`.
+
+---
+
+## Tools
+
+Advisors can use tools to look up real information during deliberation. When an advisor uses a tool, you see it in their panel:
+
+```
+🔍 Searching: "agentic AI startup failures 2025"...
+🔍 Searching: "genomics market size"...
+
+[Then the advisor's response, grounded in what they found]
+```
+
+### Available tools
+
+| Tool | Description |
+|------|-------------|
+| `web_search` | Search the web via DuckDuckGo |
+| `read_file` | Read a local file's contents |
+| `list_files` | List files/directories with glob patterns |
+| `grep_search` | Search file contents by regex pattern |
+| `run_command` | Run a shell command (timeout-limited) |
+
+Tool assignments are defined per-persona in YAML frontmatter. The TUI lets you customize tools before each deliberation (use defaults, customize per-advisor, or disable all).
 
 ---
 
@@ -228,13 +255,20 @@ divan/
   config.py       Settings (pydantic-settings)
   models.py       Provider-agnostic model factory
   engine.py       LangGraph deliberation graph
+  tools/
+    __init__.py   Tool registry
+    base.py       Core tools (web_search, read_file, list_files, grep_search, run_command)
 
 personas/
   contrarian.md   ⚔️  The Contrarian
   operator.md     ⚙️  The Operator
   visionary.md    🔭  The Visionary
   customer.md     👤  The Customer
+  defterdar.md    💰  The Defterdar
   bas_vezir.md    👁  Bas Vezir
+
+docs/
+  ROADMAP.md      Feature roadmap
 ```
 
 ---
@@ -249,7 +283,9 @@ name: The Economist
 title: Iktisat Naziri
 icon: "\U0001F4CA"
 color: cyan
-order: 5
+order: 6
+tools:
+  - web_search
 ---
 
 You are an economist advisor. You evaluate every decision through the lens of
@@ -258,7 +294,7 @@ incentives, opportunity costs, and market dynamics.
 Your signature question: "What are the economic incentives at play here?"
 ```
 
-Divan auto-discovers it on the next run. Set `order` to control display position.
+Divan auto-discovers it on the next run. Set `order` to control display position. The `tools` list is optional; omit it for a tool-free advisor.
 
 ---
 

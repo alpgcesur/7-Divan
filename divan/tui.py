@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -14,7 +15,15 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from divan.advisor import Advisor, get_advisors, load_all_personas
+from divan.advisor import (
+    Advisor,
+    get_advisors,
+    load_all_personas,
+    load_persona,
+    next_advisor_order,
+    slugify_name,
+    write_persona_file,
+)
 from divan.config import DivanSettings
 from divan.session import (
     Session,
@@ -69,6 +78,7 @@ class TUIConfig:
     advisor_model: str
     synthesis_model: str
     rounds: int = 1
+    tools_customized: bool = False
 
 
 def _print_banner() -> None:
@@ -103,6 +113,15 @@ def _print_config_summary(config: TUIConfig) -> None:
 
     advisor_names = ", ".join(f"{a.icon} {a.name}" for a in config.advisors)
     table.add_row("Advisors", advisor_names)
+
+    # Tool summary
+    tool_advisors = [a for a in config.advisors if a.tools]
+    if tool_advisors:
+        tool_parts = [f"{a.icon} {len(a.tools)}" for a in tool_advisors]
+        table.add_row("Tools", ", ".join(tool_parts) + " tools enabled")
+    else:
+        table.add_row("Tools", "disabled")
+
     table.add_row("Advisor model", config.advisor_model)
     table.add_row("Synthesis model", config.synthesis_model)
     rounds_label = f"{config.rounds} round{'s' if config.rounds > 1 else ''}"
@@ -208,8 +227,186 @@ def _prompt_session_picker(sessions: list[SessionSummary]) -> Session | None:
     return load_session(session_id)
 
 
-def prompt_advisors(available: list[Advisor]) -> list[Advisor]:
-    """Multi-select checkbox for advisor selection. All pre-selected."""
+CREATE_ADVISOR_SENTINEL = "__create_advisor__"
+
+PERSONA_GENERATION_PROMPT = """\
+You are creating a new AI advisor persona for a personal advisory council called "the Divan" \
+(inspired by the Ottoman Divan-i Humayun). The council has multiple advisors with distinct \
+worldviews who deliberate on a user's question in parallel.
+
+The existing advisors are:
+- The Contrarian (Muhalif): stress-tests ideas, finds flaws, plays devil's advocate
+- The Operator (Sadrazam): focuses on execution, shipping, practical next steps
+- The Visionary (Kahin): thinks 3-5 years out, connects to larger trends
+- The Customer (Musteri): role-plays as the potential buyer/user
+
+Based on the user's description below, generate a COMPLETE advisor persona as a JSON object \
+with these exact fields:
+
+{{
+  "name": "The [Name]",
+  "title": "[Ottoman/Turkish-style title]",
+  "icon": "[single emoji that fits the role]",
+  "color": "[one of: red, blue, green, purple, cyan, magenta, yellow, white]",
+  "system_prompt": "[full system prompt, see structure below]"
+}}
+
+The system_prompt MUST follow this exact structure:
+1. Opening paragraph: "You are [Name] ([Title]), ..." describing their role on the Divan.
+2. "## Your approach" section: 2-3 paragraphs on how they think and analyze.
+3. "## How you respond" section: 5 bullet points starting with "-".
+4. "## Your signature questions (always address at least one)" section: 3 bullet questions.
+5. "## Your style" section: 1 paragraph on tone, voice, personality.
+6. Closing: "You speak in first person, directly to the user, as if you're a real advisor \
+sitting across the table. Keep your response focused and under 400 words."
+
+Rules:
+- NEVER use em dashes or en dashes anywhere. Use commas, periods, or colons instead.
+- The advisor MUST produce meaningfully different output from the existing advisors listed above.
+- Be opinionated and specific. Balance comes from multiple perspectives, not from one balanced advisor.
+- Keep the system_prompt under 400 words.
+- Pick a color that is NOT red, blue, purple, or green (those are taken by existing advisors).
+- Output ONLY the JSON object. No explanation, no markdown code fences.
+
+User's description:
+{description}"""
+
+
+async def _generate_advisor_persona(description: str, model) -> dict:
+    """Use an LLM to generate a complete advisor persona from a description."""
+    import json
+
+    from langchain_core.messages import HumanMessage
+
+    prompt_text = PERSONA_GENERATION_PROMPT.format(description=description)
+    response = await model.ainvoke([HumanMessage(content=prompt_text)])
+    raw = response.content.strip()
+
+    # Strip markdown code fences if present
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+    if raw.endswith("```"):
+        raw = raw[:-3]
+    raw = raw.strip()
+
+    return json.loads(raw)
+
+
+def run_advisor_creator(
+    personas_dir: str,
+    advisor_model_spec: str,
+    settings: DivanSettings,
+) -> Advisor | None:
+    """Interactive wizard to create a new custom advisor persona.
+
+    The user describes what kind of advisor they want in plain language.
+    The LLM generates the name, title, icon, color, and full system prompt.
+
+    Returns the created Advisor, or None if creation fails.
+    """
+    console.print()
+    console.print(Panel(
+        "[bold]Create New Advisor[/bold]\n[dim]Describe the perspective you're missing on your council[/dim]",
+        border_style="bright_yellow",
+        padding=(1, 2),
+    ))
+    console.print()
+
+    description = inquirer.text(
+        message="Describe your advisor:",
+        style=DIVAN_STYLE,
+        validate=lambda val: len(val.strip()) > 0,
+        invalid_message="Description cannot be empty.",
+        long_instruction="e.g., \"Someone who looks at everything through money, incentives, and opportunity costs\"",
+    ).execute()
+    if not description:
+        return None
+    description = description.strip()
+
+    # Auto-compute order
+    order = next_advisor_order(personas_dir)
+
+    # Generate full persona via LLM
+    console.print()
+    from divan.models import create_model
+    try:
+        with console.status("[dim]Generating advisor persona...[/dim]"):
+            model = create_model(advisor_model_spec, settings, max_tokens=2000)
+            persona_data = asyncio.run(
+                _generate_advisor_persona(description, model)
+            )
+    except Exception as e:
+        console.print(f"[red]Error generating persona:[/red] {e}")
+        return None
+
+    name = persona_data["name"]
+    title = persona_data["title"]
+    icon = persona_data["icon"]
+    color = persona_data["color"]
+    system_prompt = persona_data["system_prompt"]
+
+    # Write file
+    filepath = write_persona_file(
+        personas_dir=personas_dir,
+        name=name,
+        title=title,
+        icon=icon,
+        color=color,
+        order=order,
+        system_prompt=system_prompt,
+    )
+
+    # Load it back to verify
+    advisor = load_persona(filepath)
+
+    console.print()
+    console.print(Panel(
+        f"[bold]{icon}  {name}[/bold] ({title})\n"
+        f"[dim]Saved to {filepath}[/dim]",
+        title="[bold green]Advisor Created[/bold green]",
+        border_style="green",
+        padding=(1, 2),
+    ))
+    console.print()
+
+    return advisor
+
+
+def prompt_advisors(
+    available: list[Advisor],
+    personas_dir: str | None = None,
+    advisor_model_spec: str | None = None,
+    settings: DivanSettings | None = None,
+) -> list[Advisor]:
+    """Advisor selection with optional create-new-advisor flow.
+
+    Shows a pre-prompt with "Create new advisor..." option when the creation
+    params are provided. Then shows the standard checkbox for selection.
+    """
+    can_create = personas_dir is not None and advisor_model_spec is not None and settings is not None
+
+    # Pre-prompt: offer to create a new advisor before selection
+    if can_create:
+        pre_choices = [
+            Choice(value="select", name="  Select from existing advisors"),
+            Separator("  ──────────"),
+            Choice(value="create", name="  + Create new advisor..."),
+        ]
+        action = inquirer.select(
+            message="Advisors",
+            choices=pre_choices,
+            style=DIVAN_STYLE,
+            pointer="  \u25b8",
+        ).execute()
+        console.print()
+
+        if action == "create":
+            new_advisor = run_advisor_creator(personas_dir, advisor_model_spec, settings)
+            # Reload and re-prompt regardless (new advisor will appear if created)
+            refreshed = get_advisors(personas_dir)
+            return prompt_advisors(refreshed, personas_dir, advisor_model_spec, settings)
+
+    # Standard checkbox selection
     choices = [
         Choice(
             value=a.id,
@@ -254,6 +451,81 @@ def prompt_context_answers(questions: list[str]) -> list[dict[str, str]]:
 
     console.print()
     return pairs
+
+
+def prompt_tools(advisors: list[Advisor]) -> list[Advisor]:
+    """Prompt user to manage tool assignments for advisors.
+
+    Shows a top-level choice: use defaults or customize. If customizing,
+    shows per-advisor tool toggles.
+
+    Returns updated advisor list (tools field may be modified).
+    """
+    from divan.tools import ensure_tools_registered, list_available_tools
+
+    ensure_tools_registered()
+    all_tools = list_available_tools()
+
+    if not all_tools:
+        return advisors
+
+    # Check if any advisor has tools
+    any_tools = any(a.tools for a in advisors)
+
+    # Build summary of current tool assignments
+    tool_summary_parts = []
+    for a in advisors:
+        if a.tools:
+            tool_summary_parts.append(f"{a.icon} {len(a.tools)} tools")
+        else:
+            tool_summary_parts.append(f"{a.icon} no tools")
+
+    choices = [
+        Choice(
+            value="default",
+            name=f"  Use defaults ({', '.join(tool_summary_parts)})",
+        ),
+        Separator("  ──────────"),
+        Choice(value="customize", name="  Customize tools..."),
+        Choice(value="disable", name="  Disable all tools"),
+    ]
+
+    result = inquirer.select(
+        message="Tools",
+        choices=choices,
+        style=DIVAN_STYLE,
+        pointer="  \u25b8",
+    ).execute()
+    console.print()
+
+    if result == "default":
+        return advisors
+    elif result == "disable":
+        for a in advisors:
+            a.tools = []
+        return advisors
+
+    # Customize: per-advisor tool selection
+    for advisor in advisors:
+        tool_choices = [
+            Choice(
+                value=tool_name,
+                name=f"  {tool_name}",
+                enabled=tool_name in advisor.tools,
+            )
+            for tool_name in all_tools
+        ]
+
+        selected = inquirer.checkbox(
+            message=f"{advisor.icon} {advisor.name} tools",
+            choices=tool_choices,
+            style=DIVAN_STYLE,
+            instruction="Space to toggle, Enter to confirm",
+        ).execute()
+        advisor.tools = selected
+        console.print()
+
+    return advisors
 
 
 def prompt_rounds() -> int:
@@ -355,9 +627,17 @@ def run_interactive_setup(
     # Advisors
     available = get_advisors(settings.personas_dir)
     if not skip_advisors:
-        advisors = prompt_advisors(available)
+        advisors = prompt_advisors(
+            available,
+            personas_dir=settings.personas_dir,
+            advisor_model_spec=settings.advisor_model,
+            settings=settings,
+        )
     else:
         advisors = available
+
+    # Tools
+    advisors = prompt_tools(advisors)
 
     # Models
     if not skip_models:

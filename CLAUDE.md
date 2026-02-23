@@ -49,13 +49,18 @@ divan/
 │   ├── synthesis.py       # Bas Vezir synthesis prompt builder
 │   ├── config.py          # Settings (API keys, model config)
 │   ├── models.py          # Model factory (provider-agnostic via init_chat_model)
-│   └── display.py         # Rich-based streaming display
+│   ├── display.py         # Rich-based streaming display
+│   └── tools/
+│       ├── __init__.py    # Tool registry (TOOL_REGISTRY, get_tools_for_advisor)
+│       └── base.py        # Core tools: web_search, read_file, list_files, grep_search, run_command
 ├── personas/
 │   ├── contrarian.md      # System prompt for The Contrarian
 │   ├── operator.md        # System prompt for The Operator
 │   ├── visionary.md       # System prompt for The Visionary
 │   ├── customer.md        # System prompt for The Customer
 │   └── bas_vezir.md       # System prompt for Bas Vezir (synthesizer)
+├── docs/
+│   └── ROADMAP.md         # Feature roadmap
 └── tests/
     └── test_engine.py
 ```
@@ -192,8 +197,28 @@ class DivanSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="DIVAN_")
 ```
 
+### Tool system
+
+Advisors can use tools to ground their advice in real information. Tools are defined per-persona via a `tools:` list in the YAML frontmatter. The tool system has three layers:
+
+1. **Tool Registry** (`divan/tools/__init__.py`): Global `TOOL_REGISTRY` dict mapping tool names to LangChain `BaseTool` instances. Functions: `register_tool()`, `get_tools_for_advisor()`, `list_available_tools()`, `ensure_tools_registered()`.
+
+2. **Core Tools** (`divan/tools/base.py`): Five tools registered on import:
+   - `web_search`: DuckDuckGo search for current information
+   - `read_file`: Read local file contents (line-limited)
+   - `list_files`: List directory contents with glob patterns
+   - `grep_search`: Regex search across files
+   - `run_command`: Shell command execution (timeout-limited)
+
+3. **Persona frontmatter**: Each persona specifies which tools it can use. Example: `tools: [web_search, read_file]`. Bas Vezir never has tools (synthesizer only).
+
+**Display behavior**: Advisors with tools use an invoke loop (no streaming during tool calls). Tool usage is shown inline in the panel (`🔍 Searching: "query"...`). The final response appears below the tool lines. Advisors without tools stream normally.
+
+**TUI integration**: The interactive setup includes a "Tools" step between advisor selection and model selection. Users can use defaults, customize per-advisor, or disable all tools.
+
 ## Important constraints
 
+- **TUI is preferred over dashed CLI commands.** The interactive TUI menu is the primary interface. CLI flags exist for scripting and automation, but interactive users should go through the TUI flow. Do not add new `--flag` commands when a TUI prompt is more appropriate.
 - **Never use em dashes in any text.** Use commas, periods, or other punctuation instead. This applies to persona prompts, CLI output, README, everything. The user has a strong preference against em dashes.
 - **Streaming is non-negotiable.** The watching-them-think experience is core to the product feel.
 - **Each persona file is self-contained.** A user can add new advisors by dropping a new .md file in the personas/ directory. The engine auto-discovers them and orders by the `order` field in frontmatter.
@@ -202,6 +227,8 @@ class DivanSettings(BaseSettings):
 
 ## Future phases (DO NOT BUILD NOW, just be aware)
 
+See `docs/ROADMAP.md` for the full roadmap.
+
 **v0.2: War Room mode (tmux)**
 - `divan --war-room "question"` opens tmux with split panes, one per advisor, all streaming simultaneously.
 
@@ -209,13 +236,9 @@ class DivanSettings(BaseSettings):
 - Ottoman-themed dark web interface with advisor cards arranged visually.
 - React + Tailwind. WebSocket streaming from a FastAPI backend.
 
-**v0.4: Tool-enabled advisors**
-- Some advisors get tools: web search, codebase reading, financial data.
-- Each persona .md would include a `tools` section in frontmatter specifying which MCP tools they can use.
-
-**v0.5: Custom Divan compositions**
+**v0.4: Custom Divan compositions**
 - Users create "Divan templates" for different decision types.
 - `divan --template startup "My idea is..."`
 
-**v0.6: Memory and learning**
+**v0.5: Memory and learning**
 - The Divan remembers past deliberations and can reference them.

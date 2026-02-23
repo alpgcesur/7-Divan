@@ -17,6 +17,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
     "inquirerpy>=0.3.4",
+    "duckduckgo-search>=6.0",
 ]
 
 [project.scripts]
