@@ -232,6 +232,7 @@ async def run_deliberation_streaming(
     advisor_tools: dict[str, list[BaseTool]] | None = None,
     advisor_memory_texts: dict[str, str] | None = None,
     synthesis_memory_text: str = "",
+    attachments: list | None = None,
 ) -> dict[str, str]:
     """Run the full deliberation with streaming display.
 
@@ -245,10 +246,12 @@ async def run_deliberation_streaming(
     advisors without tools stream normally.
     """
     # Build the enriched question with context if provided
-    if context_pairs:
+    if context_pairs or attachments:
         from divan.context import format_context_for_advisors
 
-        enriched_question = format_context_for_advisors(question, context_pairs)
+        enriched_question = format_context_for_advisors(
+            question, context_pairs, attachments=attachments
+        )
     else:
         enriched_question = question
 

@@ -69,27 +69,38 @@ async def generate_clarifying_questions(
 
 def format_context_for_advisors(
     original_question: str,
-    context_pairs: list[dict[str, str]],
+    context_pairs: list[dict[str, str]] | None = None,
+    attachments: list | None = None,
 ) -> str:
     """Format the original question with gathered context for advisors.
 
     Args:
         original_question: The user's original question.
         context_pairs: List of dicts with 'question' and 'answer' keys.
+        attachments: List of Attachment objects to include.
 
     Returns:
         An enriched question string with context prepended.
     """
-    if not context_pairs:
+    if not context_pairs and not attachments:
         return original_question
 
     parts = [f'The user asks: "{original_question}"']
-    parts.append("")
-    parts.append("Additional context:")
 
-    for pair in context_pairs:
-        parts.append(f"- Q: {pair['question']}")
-        parts.append(f"  A: {pair['answer']}")
+    # Include attachments if any
+    if attachments:
+        from divan.attachments import format_attachments
+
+        parts.append("")
+        parts.append(format_attachments(attachments))
+
+    # Include context pairs if any
+    if context_pairs:
+        parts.append("")
+        parts.append("Additional context:")
+        for pair in context_pairs:
+            parts.append(f"- Q: {pair['question']}")
+            parts.append(f"  A: {pair['answer']}")
 
     parts.append("")
     parts.append("Consider this context in your deliberation.")

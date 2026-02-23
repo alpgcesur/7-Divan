@@ -99,6 +99,7 @@ class TUIConfig:
     rounds: int = 1
     tools_customized: bool = False
     memory_enabled: bool = True
+    attachments: list | None = None
 
 
 def _print_banner() -> None:
@@ -188,6 +189,49 @@ def prompt_question() -> str:
     ).execute()
     console.print()
     return question.strip()
+
+
+def prompt_attachments() -> list:
+    """Prompt user to attach files or URLs.
+
+    Returns a list of Attachment objects. Empty if user skips.
+    """
+    from divan.attachments import Attachment, load_file_attachment, load_url_attachment
+
+    _print_section("Attach files or URLs (Enter to skip)")
+    console.print()
+
+    attachments: list[Attachment] = []
+
+    while True:
+        value = inquirer.text(
+            message="File path or URL:",
+            style=DIVAN_STYLE,
+            long_instruction="Enter a file path or URL. Press Enter to continue.",
+        ).execute()
+        value = value.strip()
+
+        if not value:
+            break
+
+        if value.startswith("http://") or value.startswith("https://"):
+            try:
+                with console.status(f"[dim]Fetching {value}...[/dim]"):
+                    att = load_url_attachment(value)
+                attachments.append(att)
+                console.print(f"  [dim]Attached: {value} ({len(att.content)} chars)[/dim]")
+            except Exception as e:
+                console.print(f"  [yellow]Warning:[/yellow] Could not fetch URL: {e}")
+        else:
+            try:
+                att = load_file_attachment(value)
+                attachments.append(att)
+                console.print(f"  [dim]Attached: {att.name} ({len(att.content)} chars)[/dim]")
+            except Exception as e:
+                console.print(f"  [yellow]Warning:[/yellow] Could not load file: {e}")
+
+    console.print()
+    return attachments
 
 
 def prompt_template(templates_dir: str) -> DivanTemplate | None:
@@ -813,6 +857,9 @@ def run_interactive_setup(
     if question is None:
         question = prompt_question()
 
+    # Attachments (after question, before template)
+    tui_attachments = prompt_attachments()
+
     # Template picker (after question, before session)
     if template is None and not skip_template:
         template = prompt_template(settings.templates_dir)
@@ -908,6 +955,7 @@ def run_interactive_setup(
         synthesis_model=synthesis_model,
         rounds=rounds,
         memory_enabled=memory_enabled,
+        attachments=tui_attachments or None,
     )
 
     _print_config_summary(config)

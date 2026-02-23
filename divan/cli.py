@@ -66,6 +66,7 @@ def _run_deliberation(
     context_pairs: list[dict] | None = None,
     advisor_memory_texts: dict[str, str] | None = None,
     synthesis_memory_text: str = "",
+    attachments: list | None = None,
 ) -> dict[str, str]:
     """Run a single deliberation round, saving results to session."""
     # Save question to session
@@ -89,6 +90,7 @@ def _run_deliberation(
             advisor_tools=advisor_tools,
             advisor_memory_texts=advisor_memory_texts,
             synthesis_memory_text=synthesis_memory_text,
+            attachments=attachments,
         )
     )
 
@@ -140,6 +142,8 @@ def _all_flags_set(
 @click.option("--no-context", is_flag=True, help="Skip clarifying questions step")
 @click.option("--template", "template_id", default=None, help="Use a pre-configured template (ID or name)")
 @click.option("--list-templates", is_flag=True, help="List available templates")
+@click.option("--attach", "attach_files", multiple=True, type=click.Path(exists=True), help="Attach a file (PDF, text, etc.)")
+@click.option("--url", "attach_urls", multiple=True, help="Attach a URL to fetch and analyze")
 def main(
     question: str | None,
     model_override: str | None,
@@ -155,6 +159,8 @@ def main(
     no_context: bool,
     template_id: str | None,
     list_templates: bool,
+    attach_files: tuple[str, ...],
+    attach_urls: tuple[str, ...],
 ) -> None:
     """Divan: Personal Advisory Council.
 
@@ -383,6 +389,35 @@ def main(
             advisor_memory_texts = None
             synthesis_memory_text = ""
 
+    # Load attachments from CLI flags and/or TUI
+    from divan.attachments import Attachment, load_file_attachment, load_url_attachment
+
+    attachments: list[Attachment] = []
+
+    # CLI-provided attachments
+    for filepath in attach_files:
+        try:
+            attachments.append(load_file_attachment(filepath))
+            console.print(f"[dim]Attached: {filepath}[/dim]")
+        except Exception as e:
+            console.print(f"[yellow]Warning:[/yellow] Could not load {filepath}: {e}")
+
+    for url in attach_urls:
+        try:
+            with console.status(f"[dim]Fetching {url}...[/dim]"):
+                attachments.append(load_url_attachment(url))
+            console.print(f"[dim]Attached: {url}[/dim]")
+        except Exception as e:
+            console.print(f"[yellow]Warning:[/yellow] Could not fetch {url}: {e}")
+
+    # TUI-provided attachments
+    if tui_was_used and hasattr(tui_config, "attachments") and tui_config.attachments:
+        attachments.extend(tui_config.attachments)
+
+    if attachments:
+        console.print(f"[dim]{len(attachments)} attachment(s) will be sent to advisors.[/dim]")
+        console.print()
+
     # Context gathering (pre-deliberation clarifying questions)
     context_pairs: list[dict] | None = None
     if is_interactive and not no_context:
@@ -411,6 +446,7 @@ def main(
             context_pairs=context_pairs if round_idx == 1 else None,
             advisor_memory_texts=advisor_memory_texts if round_idx == 1 else None,
             synthesis_memory_text=synthesis_memory_text if round_idx == 1 else "",
+            attachments=attachments if round_idx == 1 else None,
         )
 
     # Generate and save memories after deliberation
