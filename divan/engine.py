@@ -14,6 +14,21 @@ from divan.advisor import Advisor
 from divan.synthesis import build_synthesis_prompt
 
 
+def _extract_text_content(content: str | list) -> str:
+    """Extract text from AIMessage content, which may be a string or list of content blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        return "".join(parts)
+    return str(content) if content else ""
+
+
 class AdvisorResponse(TypedDict):
     advisor_id: str
     name: str
@@ -36,18 +51,25 @@ def make_advisor_node(
     advisor: Advisor,
     model: BaseChatModel,
     tools: list[BaseTool] | None = None,
+    memory_text: str = "",
 ):
     """Create an async graph node for a single advisor.
 
     If tools are provided, the advisor runs an agentic loop: invoke the model,
     execute any tool calls, feed results back, repeat until the model responds
     with plain text or the iteration limit is reached.
+
+    memory_text: optional formatted memory to prepend to system prompt.
     """
 
     async def advisor_node(state: DivanState) -> dict[str, Any]:
         try:
+            system_prompt = advisor.system_prompt
+            if memory_text:
+                system_prompt = f"{memory_text}\n\n{system_prompt}"
+
             messages: list = [
-                SystemMessage(content=advisor.system_prompt),
+                SystemMessage(content=system_prompt),
                 HumanMessage(content=state["query"]),
             ]
 
@@ -77,12 +99,12 @@ def make_advisor_node(
                             tool_call_id=tc["id"],
                         ))
 
-                response_text = result.content or ""
+                response_text = _extract_text_content(result.content)
             else:
                 result = await model.ainvoke(messages)
-                response_text = result.content
+                response_text = _extract_text_content(result.content)
         except Exception as e:
-            response_text = f"[Advisor error: {e}]"
+            response_text = f"✗ Advisor error: {e}"
 
         return {
             "advisor_responses": [
@@ -126,7 +148,7 @@ def make_synthesis_node(synthesizer: Advisor, model: BaseChatModel):
             result = await model.ainvoke(messages)
             return {"synthesis": result.content}
         except Exception as e:
-            return {"synthesis": f"[Synthesis error: {e}]"}
+            return {"synthesis": f"✗ Synthesis error: {e}"}
 
     return synthesis_node
 
@@ -137,21 +159,24 @@ def build_deliberation_graph(
     advisor_model: BaseChatModel,
     synthesis_model: BaseChatModel,
     advisor_tools: dict[str, list[BaseTool]] | None = None,
+    advisor_memory_texts: dict[str, str] | None = None,
 ) -> StateGraph:
     """Build the LangGraph deliberation graph.
 
     Structure: START -> [all advisors in parallel] -> synthesis -> END
 
     advisor_tools: optional dict mapping advisor ID to list of tool instances.
+    advisor_memory_texts: optional dict mapping advisor ID to formatted memory text.
     """
     graph = StateGraph(DivanState)
 
     # Add advisor nodes
     for advisor in advisors:
         tools = (advisor_tools or {}).get(advisor.id)
+        memory = (advisor_memory_texts or {}).get(advisor.id, "")
         graph.add_node(
             advisor.node_name,
-            make_advisor_node(advisor, advisor_model, tools=tools),
+            make_advisor_node(advisor, advisor_model, tools=tools, memory_text=memory),
         )
         graph.add_edge(START, advisor.node_name)
         graph.add_edge(advisor.node_name, synthesizer.node_name)

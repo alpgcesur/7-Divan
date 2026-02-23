@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -30,7 +31,8 @@ MAX_TOOL_ITERATIONS = 5
 def render_header(question: str) -> Panel:
     """Render the Divan header panel."""
     content = Text.from_markup(
-        f"[bold]DİVAN[/bold] [dim]Personal Advisory Council[/dim]\n\n"
+        f"[bold bright_yellow]D İ V A N[/bold bright_yellow]\n"
+        f"[dim]Personal Advisory Council[/dim]\n\n"
         f'[italic]"{question}"[/italic]'
     )
     return Panel(
@@ -40,19 +42,41 @@ def render_header(question: str) -> Panel:
     )
 
 
-def render_advisor_panel(advisor: Advisor, content: str, streaming: bool = False) -> Panel:
+def render_advisor_panel(
+    advisor: Advisor,
+    content: str,
+    streaming: bool = False,
+    error: str = "",
+    elapsed: float | None = None,
+) -> Panel:
     """Render an advisor's response panel."""
+    subtitle = advisor.title
+    if elapsed is not None:
+        subtitle = f"{advisor.title} [dim]({elapsed:.1f}s)[/dim]"
+
+    if error:
+        body = Text.from_markup(
+            f"[bold red]✗ Error[/bold red]\n\n{error}"
+        )
+        return Panel(
+            body,
+            title=f"{advisor.icon}  {advisor.name}",
+            subtitle=subtitle,
+            border_style="red",
+            padding=(1, 2),
+        )
+
     if streaming and not content:
         body = Spinner("dots", text="Deliberating...")
     elif content:
         body = Markdown(content)
     else:
-        body = Text("Waiting...", style="dim")
+        body = Text("No response received", style="dim italic")
 
     return Panel(
         body,
         title=f"{advisor.icon}  {advisor.name}",
-        subtitle=advisor.title,
+        subtitle=subtitle,
         border_style=advisor.color,
         padding=(1, 2),
     )
@@ -98,6 +122,21 @@ def _format_tool_call(name: str, args: dict) -> str:
         return f"🔧 {name}..."
 
 
+def _extract_text_content(content: str | list) -> str:
+    """Extract text from AIMessage content, which may be a string or list of content blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        return "".join(parts)
+    return str(content) if content else ""
+
+
 async def _run_advisor_with_tools(
     advisor: Advisor,
     messages: list,
@@ -113,8 +152,9 @@ async def _run_advisor_with_tools(
     tool_map = {t.name: t for t in tools}
     model_with_tools = model.bind_tools(tools)
     tool_lines: list[str] = []
+    hit_iteration_limit = False
 
-    for _ in range(MAX_TOOL_ITERATIONS):
+    for iteration in range(MAX_TOOL_ITERATIONS):
         result = await model_with_tools.ainvoke(messages)
         messages.append(result)
 
@@ -142,8 +182,15 @@ async def _run_advisor_with_tools(
                 tool_call_id=tc["id"],
             ))
 
-    # Build final content: tool lines header + response
-    final_content = result.content or ""
+        if iteration == MAX_TOOL_ITERATIONS - 1:
+            hit_iteration_limit = True
+
+    # Extract text content (handles both str and list[dict] content formats)
+    final_content = _extract_text_content(result.content)
+
+    if hit_iteration_limit and not final_content:
+        final_content = f"[Advisor reached tool iteration limit ({MAX_TOOL_ITERATIONS}) without producing a final response]"
+
     if tool_lines:
         tool_header = "\n".join(tool_lines)
         buffer_ref[advisor.id] = f"{tool_header}\n\n{final_content}"
@@ -183,6 +230,8 @@ async def run_deliberation_streaming(
     total_rounds: int = 1,
     context_pairs: list[dict] | None = None,
     advisor_tools: dict[str, list[BaseTool]] | None = None,
+    advisor_memory_texts: dict[str, str] | None = None,
+    synthesis_memory_text: str = "",
 ) -> dict[str, str]:
     """Run the full deliberation with streaming display.
 
@@ -219,6 +268,8 @@ async def run_deliberation_streaming(
 
     # Phase 1: All advisors deliberate in parallel with streaming
     buffers: dict[str, str] = {a.id: "" for a in advisors}
+    errors: dict[str, str] = {}
+    timings: dict[str, float] = {}
     advisor_map: dict[str, Advisor] = {a.id: a for a in advisors}
     completed: set[str] = set()
 
@@ -229,13 +280,23 @@ async def run_deliberation_streaming(
                 advisor,
                 buffers[advisor.id],
                 streaming=advisor.id not in completed,
+                error=errors.get(advisor.id, ""),
+                elapsed=timings.get(advisor.id),
             ))
         return Group(*panels)
 
     async def stream_one_advisor(advisor: Advisor) -> None:
-        # Build message history: system prompt + conversation history + current question
+        start_time = time.monotonic()
+
+        # Build message history: system prompt (with memory) + conversation history + current question
+        system_prompt = advisor.system_prompt
+        if advisor_memory_texts and advisor.id in advisor_memory_texts:
+            memory_text = advisor_memory_texts[advisor.id]
+            if memory_text:
+                system_prompt = f"{memory_text}\n\n{system_prompt}"
+
         messages: list[SystemMessage | HumanMessage | AIMessage] = [
-            SystemMessage(content=advisor.system_prompt),
+            SystemMessage(content=system_prompt),
         ]
 
         if session:
@@ -257,15 +318,23 @@ async def run_deliberation_streaming(
             try:
                 await _run_advisor_with_tools(advisor, messages, advisor_model, tools, buffers)
             except Exception as e:
-                buffers[advisor.id] += f"\n[Error: {e}]"
+                errors[advisor.id] = str(e)
         else:
             # Pure streaming, no tools
             try:
                 async for chunk in advisor_model.astream(messages):
                     if isinstance(chunk, AIMessageChunk) and chunk.content:
-                        buffers[advisor.id] += chunk.content
+                        text = _extract_text_content(chunk.content)
+                        if text:
+                            buffers[advisor.id] += text
             except Exception as e:
-                buffers[advisor.id] += f"\n[Error: {e}]"
+                errors[advisor.id] = str(e)
+
+        # Detect silent failures: advisor completed but produced nothing
+        if not buffers[advisor.id].strip() and advisor.id not in errors:
+            errors[advisor.id] = "Advisor completed but produced no response (possible model or tool issue)"
+
+        timings[advisor.id] = time.monotonic() - start_time
         completed.add(advisor.id)
 
     with Live(build_display(), console=console, refresh_per_second=8) as live:
@@ -283,24 +352,51 @@ async def run_deliberation_streaming(
 
     console.print()
 
+    # Post-deliberation error summary
+    if errors:
+        failed_names = []
+        for aid, err_msg in errors.items():
+            advisor = advisor_map[aid]
+            failed_names.append(f"  {advisor.icon} {advisor.name}: {err_msg}")
+        error_summary = "\n".join(failed_names)
+        console.print(Panel(
+            Text.from_markup(
+                f"[bold yellow]Warning:[/bold yellow] {len(errors)} advisor(s) failed:\n\n{error_summary}\n\n"
+                f"[dim]Tip: retry with --advisors to target specific advisors[/dim]"
+            ),
+            border_style="yellow",
+            title="⚠  Advisor Errors",
+            padding=(1, 2),
+        ))
+        console.print()
+
     # Phase 2: Bas Vezir synthesis with streaming
     previous_rounds = ""
     if session:
         previous_rounds = build_synthesis_history(session)
 
+    # Build advisor responses for synthesis, noting any failures
+    advisor_entries = []
+    for advisor in advisors:
+        aid = advisor.id
+        response = buffers[aid]
+        if aid in errors and not response.strip():
+            response = f"[This advisor did not respond due to an error: {errors[aid]}]"
+        elif not response.strip() and aid not in errors:
+            response = "[This advisor returned no response.]"
+        advisor_entries.append({
+            "name": advisor_map[aid].name,
+            "title": advisor_map[aid].title,
+            "icon": advisor_map[aid].icon,
+            "response": response,
+        })
+
     synthesis_prompt = build_synthesis_prompt(
         enriched_question,
-        [
-            {
-                "name": advisor_map[aid].name,
-                "title": advisor_map[aid].title,
-                "icon": advisor_map[aid].icon,
-                "response": buffers[aid],
-            }
-            for aid in [a.id for a in advisors]
-        ],
+        advisor_entries,
         previous_rounds=previous_rounds,
         round_num=round_num,
+        past_verdicts=synthesis_memory_text,
     )
 
     synthesis_buffer = ""
@@ -317,8 +413,10 @@ async def run_deliberation_streaming(
         try:
             async for chunk in synthesis_model.astream(synthesis_messages):
                 if isinstance(chunk, AIMessageChunk) and chunk.content:
-                    synthesis_buffer += chunk.content
-                    live.update(render_synthesis_panel(synthesis_buffer, streaming=True))
+                    text = _extract_text_content(chunk.content)
+                    if text:
+                        synthesis_buffer += text
+                        live.update(render_synthesis_panel(synthesis_buffer, streaming=True))
         except Exception as e:
             synthesis_buffer += f"\n[Synthesis error: {e}]"
 
@@ -326,7 +424,12 @@ async def run_deliberation_streaming(
 
     console.print()
 
-    # Build result
-    result = {aid: buffers[aid] for aid in buffers}
+    # Build result (include error marker in buffer for failed advisors)
+    result = {}
+    for aid in buffers:
+        if aid in errors and not buffers[aid].strip():
+            result[aid] = f"[Error: {errors[aid]}]"
+        else:
+            result[aid] = buffers[aid]
     result["synthesis"] = synthesis_buffer
     return result

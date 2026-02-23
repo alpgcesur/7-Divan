@@ -50,10 +50,6 @@ def ensure_divan_dir() -> None:
     """Create .divan/sessions/ and .divan/memory/ if they don't exist."""
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-    # Create placeholder memory file
-    memory_file = MEMORY_DIR / "MEMORY.md"
-    if not memory_file.exists():
-        memory_file.write_text("# Divan Memory\n\nPlaceholder for future memory feature.\n")
 
 
 def _session_path(session_id: str) -> Path:

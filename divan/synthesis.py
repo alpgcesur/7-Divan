@@ -6,6 +6,7 @@ def build_synthesis_prompt(
     advisor_responses: list[dict],
     previous_rounds: str = "",
     round_num: int = 1,
+    past_verdicts: str = "",
 ) -> str:
     """Build the prompt that Bas Vezir uses to synthesize all advisor responses.
 
@@ -14,6 +15,7 @@ def build_synthesis_prompt(
         advisor_responses: List of dicts with keys: name, title, icon, response.
         previous_rounds: Optional context from prior deliberation rounds.
         round_num: Current round number (1-based). When > 1, adds debate context.
+        past_verdicts: Optional formatted past verdict memories for cross-session context.
     """
     sections = []
     for resp in advisor_responses:
@@ -22,6 +24,10 @@ def build_synthesis_prompt(
     advisor_text = "\n\n".join(sections)
 
     parts = []
+
+    if past_verdicts:
+        parts.append(f"{past_verdicts}\n")
+
     if previous_rounds:
         parts.append(
             "This is an ongoing Divan deliberation. Here is the context from previous rounds:\n\n"

@@ -79,6 +79,7 @@ class TUIConfig:
     synthesis_model: str
     rounds: int = 1
     tools_customized: bool = False
+    memory_enabled: bool = True
 
 
 def _print_banner() -> None:
@@ -128,6 +129,16 @@ def _print_config_summary(config: TUIConfig) -> None:
     if config.rounds == 1:
         rounds_label += " (standard)"
     table.add_row("Debate rounds", rounds_label)
+
+    # Memory status
+    from divan.memory import count_deliberations
+    mem_count = count_deliberations()
+    if config.memory_enabled and mem_count > 0:
+        table.add_row("Memory", f"enabled ({mem_count} past deliberations)")
+    elif config.memory_enabled:
+        table.add_row("Memory", "enabled (no past deliberations)")
+    else:
+        table.add_row("Memory", "disabled")
 
     if config.session:
         rounds = config.session.num_rounds
@@ -225,6 +236,82 @@ def _prompt_session_picker(sessions: list[SessionSummary]) -> Session | None:
     console.print()
 
     return load_session(session_id)
+
+
+def prompt_memory() -> bool:
+    """Prompt user to manage cross-session memory.
+
+    Returns True if memory should be enabled for this session.
+    """
+    from divan.memory import (
+        clear_all_memories,
+        count_deliberations,
+        load_verdict_memories,
+    )
+
+    num = count_deliberations()
+
+    if num == 0:
+        # No memories yet, just inform and enable by default
+        _print_section("Memory: no past deliberations yet (will start recording)")
+        console.print()
+        return True
+
+    choices = [
+        Choice(
+            value="use",
+            name=f"  Use memory ({num} past deliberation{'s' if num != 1 else ''})",
+        ),
+        Separator("  ──────────"),
+        Choice(value="view", name="  View past verdicts..."),
+        Choice(value="disable", name="  Disable memory for this session"),
+        Choice(value="clear", name="  Clear all memory"),
+    ]
+
+    result = inquirer.select(
+        message="Memory",
+        choices=choices,
+        style=DIVAN_STYLE,
+        pointer="  \u25b8",
+    ).execute()
+    console.print()
+
+    if result == "use":
+        return True
+    elif result == "disable":
+        return False
+    elif result == "clear":
+        deleted = clear_all_memories()
+        console.print(f"  [dim]Cleared {deleted} memory file{'s' if deleted != 1 else ''}.[/dim]")
+        console.print()
+        return False
+    elif result == "view":
+        verdicts = load_verdict_memories(limit=10)
+        if not verdicts:
+            console.print("  [dim]No past verdicts found.[/dim]")
+            console.print()
+            return True
+
+        table = Table(
+            show_header=True,
+            show_edge=False,
+            padding=(0, 2, 0, 4),
+        )
+        table.add_column("Question", style="bold", max_width=40)
+        table.add_column("Verdict", style="bright_yellow")
+        table.add_column("Summary", style="dim", max_width=50)
+
+        for v in verdicts:
+            q = v.question[:37] + "..." if len(v.question) > 40 else v.question
+            table.add_row(q, v.verdict, v.summary)
+
+        console.print(table)
+        console.print()
+
+        # After viewing, ask again
+        return prompt_memory()
+
+    return True
 
 
 CREATE_ADVISOR_SENTINEL = "__create_advisor__"
@@ -624,6 +711,9 @@ def run_interactive_setup(
     else:
         session = create_session()
 
+    # Memory
+    memory_enabled = prompt_memory()
+
     # Advisors
     available = get_advisors(settings.personas_dir)
     if not skip_advisors:
@@ -667,6 +757,7 @@ def run_interactive_setup(
         advisor_model=advisor_model,
         synthesis_model=synthesis_model,
         rounds=rounds,
+        memory_enabled=memory_enabled,
     )
 
     _print_config_summary(config)

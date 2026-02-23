@@ -50,6 +50,7 @@ divan/
 │   ├── config.py          # Settings (API keys, model config)
 │   ├── models.py          # Model factory (provider-agnostic via init_chat_model)
 │   ├── display.py         # Rich-based streaming display
+│   ├── memory.py          # Cross-session advisor memory (per-advisor JSONL + shared verdicts)
 │   └── tools/
 │       ├── __init__.py    # Tool registry (TOOL_REGISTRY, get_tools_for_advisor)
 │       └── base.py        # Core tools: web_search, read_file, list_files, grep_search, run_command
@@ -130,6 +131,29 @@ Role-plays as the potential buyer/user. Signature: "Why would I pay for this?" /
 
 **5. Bas Vezir (Grand Vizier), 👁, Gold, Order 99 (always last)**
 Synthesizes ALL advisor responses into a structured decision brief with: Verdict, Agreements, Disagreements, Recommended Action, and "The one thing everyone missed."
+
+### Cross-session memory (memory.py)
+
+Advisors have cross-session memory so they can reference past advice. Memory is generated automatically after each deliberation and injected into system prompts.
+
+**Storage** (`.divan/memory/`):
+- Per-advisor JSONL files (`contrarian.jsonl`, `operator.jsonl`, etc.): each advisor's key insights from past sessions
+- Shared verdicts file (`_verdicts.jsonl`): council decisions all advisors can see
+
+**Memory lifecycle**:
+1. **TUI prompt** (between Session and Advisors): "Use memory / View / Disable / Clear"
+2. **Load** before deliberation: `load_advisor_memories(advisor_id, limit=5)` + `load_verdict_memories(limit=3)`
+3. **Inject** by prepending formatted memory to each advisor's system prompt in `stream_one_advisor()`
+4. **Generate** after deliberation: single LLM call extracts key insight per advisor + verdict summary
+5. **Save** per-advisor JSONL entries + verdict entry
+
+**Key design decisions**:
+- Per-advisor files preserve advisor isolation (each only sees their own past insights + shared verdicts)
+- One LLM call per deliberation for memory extraction (uses the cheap advisor model)
+- Prepend to system prompt (not a separate message) so memory feels like inherent knowledge
+- 5 recent advisor memories + 3 recent verdicts keeps context window manageable (~500-800 tokens)
+- No CLI flags: memory management entirely through TUI, enabled by default in non-interactive mode
+- Memory extraction failure never breaks the main deliberation flow
 
 ### Deliberation engine (engine.py)
 

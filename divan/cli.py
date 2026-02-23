@@ -15,6 +15,13 @@ from divan.advisor import Advisor, get_advisors, get_synthesizer, load_all_perso
 from divan.config import get_settings
 from divan.display import run_deliberation_streaming
 from divan.export import export_session_markdown
+from divan.memory import (
+    format_advisor_memory,
+    format_verdict_memory_for_synthesis,
+    generate_and_save_memories,
+    load_advisor_memories,
+    load_verdict_memories,
+)
 from divan.models import create_advisor_model, create_synthesis_model
 from divan.tools import ensure_tools_registered, get_tools_for_advisor
 from divan.session import (
@@ -56,6 +63,8 @@ def _run_deliberation(
     round_num: int = 1,
     total_rounds: int = 1,
     context_pairs: list[dict] | None = None,
+    advisor_memory_texts: dict[str, str] | None = None,
+    synthesis_memory_text: str = "",
 ) -> dict[str, str]:
     """Run a single deliberation round, saving results to session."""
     # Save question to session
@@ -77,6 +86,8 @@ def _run_deliberation(
             total_rounds=total_rounds,
             context_pairs=context_pairs,
             advisor_tools=advisor_tools,
+            advisor_memory_texts=advisor_memory_texts,
+            synthesis_memory_text=synthesis_memory_text,
         )
     )
 
@@ -285,6 +296,31 @@ def main(
     if num_rounds is None:
         num_rounds = 1
 
+    # Memory: determine if enabled and load if so
+    memory_enabled = True  # default for non-interactive mode
+    tui_was_used = is_interactive and not (has_question and all_flags)
+    if tui_was_used:
+        memory_enabled = tui_config.memory_enabled
+
+    advisor_memory_texts: dict[str, str] | None = None
+    synthesis_memory_text = ""
+    if memory_enabled:
+        try:
+            verdicts = load_verdict_memories(limit=3)
+            synthesis_memory_text = format_verdict_memory_for_synthesis(verdicts)
+            advisor_memory_texts = {}
+            for advisor in advisors:
+                memories = load_advisor_memories(advisor.id, limit=5)
+                text = format_advisor_memory(advisor.id, memories, verdicts)
+                if text:
+                    advisor_memory_texts[advisor.id] = text
+            if not advisor_memory_texts:
+                advisor_memory_texts = None
+        except Exception as e:
+            console.print(f"[dim]Skipping memory loading: {e}[/dim]")
+            advisor_memory_texts = None
+            synthesis_memory_text = ""
+
     # Context gathering (pre-deliberation clarifying questions)
     context_pairs: list[dict] | None = None
     if is_interactive and not no_context:
@@ -311,7 +347,27 @@ def main(
             round_num=round_idx,
             total_rounds=num_rounds,
             context_pairs=context_pairs if round_idx == 1 else None,
+            advisor_memory_texts=advisor_memory_texts if round_idx == 1 else None,
+            synthesis_memory_text=synthesis_memory_text if round_idx == 1 else "",
         )
+
+    # Generate and save memories after deliberation
+    if memory_enabled and session:
+        try:
+            # Build advisor_responses dict from the last round's result
+            advisor_responses = {a.id: result[a.id] for a in advisors if a.id in result}
+            with console.status("[dim]Saving memories...[/dim]"):
+                asyncio.run(
+                    generate_and_save_memories(
+                        session_id=session.id,
+                        question=question,
+                        advisor_responses=advisor_responses,
+                        synthesis=result.get("synthesis", ""),
+                        model=advisor_llm,
+                    )
+                )
+        except Exception as e:
+            console.print(f"[dim]Memory save skipped: {e}[/dim]")
 
     # Interactive follow-up loop
     if sys.stdin.isatty():

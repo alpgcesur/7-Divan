@@ -159,7 +159,9 @@ graph LR
 - **Context gathering.** Before deliberation, an LLM generates 2-3 clarifying questions. Your answers become structured context that all advisors receive.
 - **Streaming is mandatory.** The watching-them-think experience is core to how Divan feels.
 - **Tool-enabled advisors.** Advisors can use tools (web search, file reading, grep, shell commands) to ground their advice in real data. Tool usage is shown inline before the response.
+- **Cross-session memory.** Advisors remember past deliberations. Each advisor retains their own key insights, and all share a verdict history. Memory is managed through the TUI (use/view/disable/clear).
 - **Sessions persist.** Every deliberation is saved as JSONL in `.divan/sessions/`. Continue any session with `-c` or `--session <id>`.
+- **Error visibility.** Failed advisors show red-bordered error panels with clear messages instead of silent empty responses. A post-deliberation summary lists all failures. Bas Vezir is informed about missing advisors.
 
 ---
 
@@ -251,9 +253,10 @@ divan/
   advisor.py      Persona loader
   synthesis.py    Bas Vezir prompt builder
   session.py      Session persistence (JSONL)
+  memory.py       Cross-session advisor memory (per-advisor JSONL + shared verdicts)
   export.py       Polished markdown export
   config.py       Settings (pydantic-settings)
-  models.py       Provider-agnostic model factory
+  models.py       Provider-agnostic model factory (reasoning model support)
   engine.py       LangGraph deliberation graph
   tools/
     __init__.py   Tool registry
@@ -314,7 +317,7 @@ uv run divan
 
 - **Python 3.11+** with async throughout
 - **LangGraph** for parallel fan-out/fan-in orchestration
-- **LangChain** with `init_chat_model()` for provider-agnostic model creation
+- **LangChain** with `init_chat_model()` for provider-agnostic model creation (with direct `ChatOpenAI` for reasoning models)
 - **Rich** for terminal UI (panels, live streaming, markdown rendering)
 - **InquirerPy** for interactive prompts
 - **Click** for CLI argument parsing
