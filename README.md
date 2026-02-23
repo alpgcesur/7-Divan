@@ -66,7 +66,7 @@ Requires Python 3.11+.
 ```bash
 git clone https://github.com/alpgcesur/7-Divan.git
 cd 7-Divan
-uv sync
+uv sync   # installs dependencies and makes `divan` command available
 ```
 
 Copy the example env file and add at least one API key:
@@ -87,44 +87,44 @@ Supported providers: OpenAI, Anthropic, Google (Gemini).
 Just run it. The TUI walks you through everything: question, template, session, advisors, models, debate rounds.
 
 ```bash
-uv run divan
+divan
 ```
 
 ### With flags
 
 ```bash
 # Direct question
-uv run divan "Should I build X?"
+divan "Should I build X?"
 
 # Use a template
-uv run divan --template startup "Should I build X?"
+divan --template startup "Should I build X?"
 
 # Pipe from stdin
-echo "Should I build X?" | uv run divan
+echo "Should I build X?" | divan
 
 # Pick specific advisors
-uv run divan "Should I build X?" --advisors contrarian,operator
+divan "Should I build X?" --advisors contrarian,operator
 
 # Multiple debate rounds
-uv run divan "Should I build X?" --rounds 2
+divan "Should I build X?" --rounds 2
 
 # Skip clarifying questions
-uv run divan "Should I build X?" --no-context
+divan "Should I build X?" --no-context
 
 # Save polished decision brief
-uv run divan "Should I build X?" -o brief.md
+divan "Should I build X?" -o brief.md
 
 # Continue a previous session
-uv run divan -c
+divan -c
 
 # List available personas
-uv run divan --list
+divan --list
 
 # List available templates
-uv run divan --list-templates
+divan --list-templates
 
 # List past sessions
-uv run divan --history
+divan --history
 ```
 
 ---
@@ -367,7 +367,7 @@ You can also create advisors interactively through the TUI. When selecting advis
 uv run pytest tests/ -v
 
 # Run the CLI directly
-uv run divan
+divan
 ```
 
 ---
