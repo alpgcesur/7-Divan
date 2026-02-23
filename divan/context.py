@@ -43,7 +43,12 @@ async def generate_clarifying_questions(
     ]
 
     response = await model.ainvoke(messages)
-    content = response.content.strip()
+    raw = response.content
+    content = raw if isinstance(raw, str) else "".join(
+        block if isinstance(block, str) else block.get("text", "")
+        for block in raw
+    )
+    content = content.strip()
 
     # Strip markdown code fences if present
     if content.startswith("```"):

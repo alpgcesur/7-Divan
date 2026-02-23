@@ -367,7 +367,12 @@ async def _generate_advisor_persona(description: str, model) -> dict:
 
     prompt_text = PERSONA_GENERATION_PROMPT.format(description=description)
     response = await model.ainvoke([HumanMessage(content=prompt_text)])
-    raw = response.content.strip()
+    content = response.content
+    raw = content if isinstance(content, str) else "".join(
+        block if isinstance(block, str) else block.get("text", "")
+        for block in content
+    )
+    raw = raw.strip()
 
     # Strip markdown code fences if present
     if raw.startswith("```"):
@@ -464,11 +469,14 @@ def prompt_advisors(
     personas_dir: str | None = None,
     advisor_model_spec: str | None = None,
     settings: DivanSettings | None = None,
+    suggested_ids: list[str] | None = None,
 ) -> list[Advisor]:
     """Advisor selection with optional create-new-advisor flow.
 
     Shows a pre-prompt with "Create new advisor..." option when the creation
     params are provided. Then shows the standard checkbox for selection.
+
+    If suggested_ids is provided, only those advisors are pre-checked.
     """
     can_create = personas_dir is not None and advisor_model_spec is not None and settings is not None
 
@@ -491,14 +499,14 @@ def prompt_advisors(
             new_advisor = run_advisor_creator(personas_dir, advisor_model_spec, settings)
             # Reload and re-prompt regardless (new advisor will appear if created)
             refreshed = get_advisors(personas_dir)
-            return prompt_advisors(refreshed, personas_dir, advisor_model_spec, settings)
+            return prompt_advisors(refreshed, personas_dir, advisor_model_spec, settings, suggested_ids)
 
-    # Standard checkbox selection
+    # Standard checkbox selection (pre-check suggested or all)
     choices = [
         Choice(
             value=a.id,
             name=f"  {a.icon}  {a.name} ({a.title})",
-            enabled=True,
+            enabled=a.id in suggested_ids if suggested_ids else True,
         )
         for a in available
     ]
@@ -716,12 +724,33 @@ def run_interactive_setup(
 
     # Advisors
     available = get_advisors(settings.personas_dir)
+
+    # Smart advisor selection: suggest relevant advisors based on question
+    suggested_ids: list[str] | None = None
+    if not skip_advisors and question:
+        try:
+            from divan.advisor_selector import select_advisors
+            from divan.models import create_model
+
+            with console.status("[dim]Analyzing question...[/dim]"):
+                selector_model = create_model(settings.advisor_model, settings, max_tokens=200)
+                suggested_ids = asyncio.run(select_advisors(question, available, selector_model))
+            if suggested_ids and len(suggested_ids) < len(available):
+                suggested_names = ", ".join(
+                    f"{a.icon} {a.name}" for a in available if a.id in suggested_ids
+                )
+                console.print(f"  [dim]Suggested:[/dim] {suggested_names}")
+                console.print()
+        except Exception:
+            suggested_ids = None
+
     if not skip_advisors:
         advisors = prompt_advisors(
             available,
             personas_dir=settings.personas_dir,
             advisor_model_spec=settings.advisor_model,
             settings=settings,
+            suggested_ids=suggested_ids,
         )
     else:
         advisors = available

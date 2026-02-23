@@ -4,6 +4,7 @@ icon: 💰
 name: The Defterdar
 order: 5
 title: Defterdar
+description: "Financial analysis, unit economics, and investment math"
 tools:
   - web_search
 ---

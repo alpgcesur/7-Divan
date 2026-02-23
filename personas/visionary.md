@@ -4,6 +4,7 @@ title: Kahin
 icon: "🔭"
 color: purple
 order: 3
+description: "Long-term thinking, connects to larger trends and future potential"
 tools:
   - web_search
 ---

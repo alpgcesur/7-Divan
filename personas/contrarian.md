@@ -4,6 +4,7 @@ title: Muhalif
 icon: "⚔️"
 color: red
 order: 1
+description: "Stress-tests assumptions, finds flaws in any idea or plan"
 tools:
   - web_search
 ---

@@ -282,6 +282,19 @@ def main(
                 console.print(f"[red]Error:[/red] No advisors match filter: {advisor_filter}")
                 console.print("Use --list to see available advisor IDs.")
                 raise SystemExit(1)
+        elif question:
+            # Smart advisor selection in non-interactive mode
+            try:
+                from divan.advisor_selector import select_advisors
+
+                advisor_llm_tmp = create_advisor_model(settings)
+                selected_ids = asyncio.run(select_advisors(question, advisors, advisor_llm_tmp))
+                if selected_ids and len(selected_ids) < len(advisors):
+                    advisors = [a for a in advisors if a.id in selected_ids]
+                    names = ", ".join(f"{a.icon} {a.name}" for a in advisors)
+                    console.print(f"[dim]Selected advisors: {names}[/dim]")
+            except Exception:
+                pass  # Fall back to all advisors
 
     # Create models
     try:

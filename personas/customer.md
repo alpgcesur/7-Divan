@@ -4,6 +4,7 @@ title: "Müşteri"
 icon: "👤"
 color: green
 order: 4
+description: "Role-plays as the potential buyer or user of a product or service"
 tools:
   - web_search
 ---

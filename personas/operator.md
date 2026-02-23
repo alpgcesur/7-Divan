@@ -4,6 +4,7 @@ title: Sadrazam
 icon: "⚙️"
 color: blue
 order: 2
+description: "Execution-focused, breaks down next steps and shipping plans"
 tools:
   - web_search
   - read_file

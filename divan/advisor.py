@@ -16,6 +16,7 @@ class Advisor:
     color: str
     order: int
     system_prompt: str
+    description: str = ""
     is_synthesizer: bool = False
     tools: list[str] = field(default_factory=list)
 
@@ -48,6 +49,7 @@ def load_persona(filepath: Path) -> Advisor:
         color=frontmatter["color"],
         order=frontmatter["order"],
         system_prompt=system_prompt,
+        description=frontmatter.get("description", ""),
         is_synthesizer=frontmatter.get("is_synthesizer", False),
         tools=frontmatter.get("tools", []),
     )

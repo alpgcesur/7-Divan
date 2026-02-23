@@ -264,7 +264,12 @@ async def extract_memories(
     )
 
     result = await model.ainvoke([HumanMessage(content=prompt)])
-    raw = result.content.strip()
+    content = result.content
+    raw = content if isinstance(content, str) else "".join(
+        block if isinstance(block, str) else block.get("text", "")
+        for block in content
+    )
+    raw = raw.strip()
 
     # Strip markdown code fences if present
     if raw.startswith("```"):
