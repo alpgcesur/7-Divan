@@ -5,6 +5,7 @@ def build_synthesis_prompt(
     question: str,
     advisor_responses: list[dict],
     previous_rounds: str = "",
+    round_num: int = 1,
 ) -> str:
     """Build the prompt that Bas Vezir uses to synthesize all advisor responses.
 
@@ -12,6 +13,7 @@ def build_synthesis_prompt(
         question: The current user question.
         advisor_responses: List of dicts with keys: name, title, icon, response.
         previous_rounds: Optional context from prior deliberation rounds.
+        round_num: Current round number (1-based). When > 1, adds debate context.
     """
     sections = []
     for resp in advisor_responses:
@@ -38,6 +40,12 @@ def build_synthesis_prompt(
         parts.append(
             "\n\nBuild on the previous rounds. Reference how perspectives have evolved "
             "and highlight what is new in this round."
+        )
+
+    if round_num > 1:
+        parts.append(
+            f"\n\nThis is deliberation round {round_num}. Advisors have seen your previous "
+            "synthesis and refined their positions. Note how the council is converging or diverging."
         )
 
     return "".join(parts)

@@ -159,6 +159,33 @@ def build_advisor_history(session: Session, advisor_id: str) -> list[HumanMessag
     return messages
 
 
+def build_advisor_debate_history(
+    session: Session,
+    advisor_id: str,
+) -> list[HumanMessage | AIMessage]:
+    """Build per-advisor debate history including Bas Vezir synthesis.
+
+    Unlike build_advisor_history, this includes the Bas Vezir synthesis after
+    each round as a HumanMessage, so the advisor sees the synthesis as context
+    for their next response. Used for rounds 2+ in debate mode.
+
+    Returns: [HumanMessage(Q), AIMessage(advisor response), HumanMessage("Bas Vezir synthesis: ..."), ...]
+    """
+    messages: list[HumanMessage | AIMessage] = []
+
+    for entry in session.entries:
+        if entry["type"] == "question":
+            messages.append(HumanMessage(content=entry["content"]))
+        elif entry["type"] == "advisor_response" and entry["advisor_id"] == advisor_id:
+            messages.append(AIMessage(content=entry["content"]))
+        elif entry["type"] == "synthesis":
+            messages.append(HumanMessage(
+                content=f"Bas Vezir's synthesis of the council's deliberation:\n\n{entry['content']}"
+            ))
+
+    return messages
+
+
 def build_synthesis_history(session: Session) -> str:
     """Build full context string for Bas Vezir across all rounds.
 
@@ -212,4 +239,17 @@ def save_synthesis(session_id: str, content: str) -> None:
     append_entry(session_id, {
         "type": "synthesis",
         "content": content,
+    })
+
+
+def save_context(session_id: str, context_pairs: list[dict[str, str]]) -> None:
+    """Save context gathering results to the session.
+
+    Args:
+        session_id: The session ID.
+        context_pairs: List of dicts with 'question' and 'answer' keys.
+    """
+    append_entry(session_id, {
+        "type": "context",
+        "pairs": context_pairs,
     })

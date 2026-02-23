@@ -14,8 +14,10 @@ from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.text import Text
 
+from rich.rule import Rule
+
 from divan.advisor import Advisor
-from divan.session import Session, build_advisor_history, build_synthesis_history
+from divan.session import Session, build_advisor_debate_history, build_advisor_history, build_synthesis_history
 from divan.synthesis import build_synthesis_prompt
 
 
@@ -99,6 +101,9 @@ async def run_deliberation_streaming(
     advisor_model: BaseChatModel,
     synthesis_model: BaseChatModel,
     session: Session | None = None,
+    round_num: int = 1,
+    total_rounds: int = 1,
+    context_pairs: list[dict] | None = None,
 ) -> dict[str, str]:
     """Run the full deliberation with streaming display.
 
@@ -107,10 +112,27 @@ async def run_deliberation_streaming(
     If session is provided, advisors receive their per-advisor history and
     Bas Vezir receives the full deliberation history.
     """
-    # Print header
-    console.print()
-    console.print(render_header(question))
-    console.print()
+    # Build the enriched question with context if provided
+    if context_pairs:
+        from divan.context import format_context_for_advisors
+
+        enriched_question = format_context_for_advisors(question, context_pairs)
+    else:
+        enriched_question = question
+
+    # Print header (only on round 1)
+    if round_num == 1:
+        console.print()
+        console.print(render_header(question))
+        console.print()
+
+    # Print round header if multi-round
+    if total_rounds > 1:
+        console.print(Rule(
+            f"Round {round_num} of {total_rounds}",
+            style="bright_yellow",
+        ))
+        console.print()
 
     # Phase 1: All advisors deliberate in parallel with streaming
     buffers: dict[str, str] = {a.id: "" for a in advisors}
@@ -134,12 +156,15 @@ async def run_deliberation_streaming(
         ]
 
         if session:
-            # Add per-advisor history (previous Q&A pairs for this advisor only)
-            history = build_advisor_history(session, advisor.id)
+            # For debate rounds (round 2+), use debate history that includes synthesis
+            if round_num > 1:
+                history = build_advisor_debate_history(session, advisor.id)
+            else:
+                history = build_advisor_history(session, advisor.id)
             messages.extend(history)
 
-        # Add the current question
-        messages.append(HumanMessage(content=question))
+        # Add the current question (enriched with context if available)
+        messages.append(HumanMessage(content=enriched_question))
 
         try:
             async for chunk in advisor_model.astream(messages):
@@ -151,14 +176,16 @@ async def run_deliberation_streaming(
 
     with Live(build_display(), console=console, refresh_per_second=8) as live:
         tasks = [asyncio.create_task(stream_one_advisor(a)) for a in advisors]
+        gather_task = asyncio.ensure_future(asyncio.gather(*tasks, return_exceptions=True))
 
-        while not all(a.id in completed for a in advisors):
+        # Refresh display while advisors are streaming
+        while not gather_task.done():
             live.update(build_display())
             await asyncio.sleep(0.1)
 
-        # Final update
+        # Ensure all tasks have resolved and render final state
+        await gather_task
         live.update(build_display())
-        await asyncio.gather(*tasks, return_exceptions=True)
 
     console.print()
 
@@ -168,7 +195,7 @@ async def run_deliberation_streaming(
         previous_rounds = build_synthesis_history(session)
 
     synthesis_prompt = build_synthesis_prompt(
-        question,
+        enriched_question,
         [
             {
                 "name": advisor_map[aid].name,
@@ -179,6 +206,7 @@ async def run_deliberation_streaming(
             for aid in [a.id for a in advisors]
         ],
         previous_rounds=previous_rounds,
+        round_num=round_num,
     )
 
     synthesis_buffer = ""

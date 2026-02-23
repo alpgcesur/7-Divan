@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from divan.session import (
     Session,
     append_entry,
+    build_advisor_debate_history,
     build_advisor_history,
     build_synthesis_history,
     create_session,
@@ -188,3 +189,78 @@ class TestHistoryBuilding:
         loaded = load_session(session.id)
         history = build_synthesis_history(loaded)
         assert history == ""
+
+
+class TestDebateHistory:
+    def _build_multi_round_session(self) -> Session:
+        """Create a session with 2 rounds including synthesis."""
+        session = create_session()
+
+        # Round 1
+        save_question(session.id, "Should I build X?")
+        save_advisor_response(session.id, "contrarian", "The Contrarian", "Muhalif", "\u2694\ufe0f", "It will fail.")
+        save_advisor_response(session.id, "operator", "The Operator", "Sadrazam", "\u2699\ufe0f", "Ship fast.")
+        save_synthesis(session.id, "The council is divided.")
+
+        return load_session(session.id)
+
+    def test_debate_history_includes_synthesis(self):
+        session = self._build_multi_round_session()
+        history = build_advisor_debate_history(session, "contrarian")
+
+        # Should see: Q, contrarian response, synthesis as HumanMessage
+        assert len(history) == 3
+        assert isinstance(history[0], HumanMessage)
+        assert history[0].content == "Should I build X?"
+        assert isinstance(history[1], AIMessage)
+        assert history[1].content == "It will fail."
+        assert isinstance(history[2], HumanMessage)
+        assert "The council is divided." in history[2].content
+
+    def test_debate_history_synthesis_is_human_message(self):
+        """Synthesis should be injected as HumanMessage, not AIMessage."""
+        session = self._build_multi_round_session()
+        history = build_advisor_debate_history(session, "contrarian")
+
+        synthesis_msg = history[2]
+        assert isinstance(synthesis_msg, HumanMessage)
+        assert "Bas Vezir" in synthesis_msg.content
+
+    def test_debate_history_excludes_other_advisors(self):
+        session = self._build_multi_round_session()
+        history = build_advisor_debate_history(session, "operator")
+
+        contents = [m.content for m in history]
+        assert any("Ship fast." in c for c in contents)
+        assert not any("It will fail." in c for c in contents)
+
+    def test_debate_history_empty_session(self):
+        session = create_session()
+        loaded = load_session(session.id)
+        history = build_advisor_debate_history(loaded, "contrarian")
+        assert history == []
+
+    def test_debate_history_two_rounds(self):
+        session = create_session()
+
+        # Round 1
+        save_question(session.id, "Q1")
+        save_advisor_response(session.id, "contrarian", "The Contrarian", "Muhalif", "\u2694\ufe0f", "R1 response")
+        save_synthesis(session.id, "R1 synthesis")
+
+        # Round 2
+        save_question(session.id, "Q1")
+        save_advisor_response(session.id, "contrarian", "The Contrarian", "Muhalif", "\u2694\ufe0f", "R2 response")
+        save_synthesis(session.id, "R2 synthesis")
+
+        loaded = load_session(session.id)
+        history = build_advisor_debate_history(loaded, "contrarian")
+
+        # Q1, R1 response, R1 synthesis, Q1 (again), R2 response, R2 synthesis
+        assert len(history) == 6
+        assert isinstance(history[0], HumanMessage)  # Q1
+        assert isinstance(history[1], AIMessage)      # R1 response
+        assert isinstance(history[2], HumanMessage)   # R1 synthesis
+        assert isinstance(history[3], HumanMessage)   # Q1 (round 2)
+        assert isinstance(history[4], AIMessage)      # R2 response
+        assert isinstance(history[5], HumanMessage)   # R2 synthesis

@@ -1,0 +1,285 @@
+# Divan
+
+**Multi-perspective AI deliberation for hard decisions.**
+
+Divan assembles a council of AI advisors with distinct worldviews, runs them in parallel on your question, then synthesizes everything into a decision brief. Named after the Ottoman *Divan-i Humayun* (Imperial Council), where advisors with different roles deliberated on matters of state before the Sultan decided.
+
+```
+$ divan
+
+╭──────────────────────────────────────────────╮
+│  D I V A N                                   │
+│  Personal Advisory Council                   │
+╰──────────────────────────────────────────────╯
+
+  ? Your question: Should I leave consulting to build a genomics startup?
+
+  ? Debate rounds: 2 rounds (advisors respond to synthesis)
+
+  Generating clarifying questions...
+  ? What is your current monthly revenue from consulting?  ~$15k
+  ? Do you have a technical co-founder?  No, solo
+
+  ── Round 1 of 2 ──
+
+  ┌ ⚔️  The Contrarian ─────────────┐  ┌ ⚙️  The Operator ─────────────┐
+  │ Why will this fail? ...         │  │ Can you ship v0.1 in a        │
+  │                                 │  │ weekend? ...                  │
+  └─────────────────────────────────┘  └─────────────────────────────────┘
+
+  ┌ 🔭  The Visionary ──────────────┐  ┌ 👤  The Customer ──────────────┐
+  │ What does this become at        │  │ Why would I pay for this? ... │
+  │ scale? ...                      │  │                               │
+  └─────────────────────────────────┘  └─────────────────────────────────┘
+
+  ┌ 👁  Bas Vezir ──────────────────────────────────────────────────────┐
+  │ Synthesizing the council's deliberation...                         │
+  └────────────────────────────────────────────────────────────────────┘
+
+  ── Round 2 of 2 ──
+  [Advisors respond to the synthesis, refining their positions...]
+```
+
+---
+
+## The Council
+
+| Advisor | Role | Signature Question |
+|---------|------|--------------------|
+| ⚔️ The Contrarian (Muhalif) | Stress-tests assumptions, finds every flaw | "Why will this fail?" |
+| ⚙️ The Operator (Sadrazam) | Only cares about execution and shipping | "Can you ship a v0.1 this weekend?" |
+| 🔭 The Visionary (Kahin) | Thinks 3-5 years out, connects to trends | "What does this become at scale?" |
+| 👤 The Customer (Musteri) | Role-plays as the potential buyer/user | "Why would I pay for this?" |
+| 👁 Bas Vezir (Grand Vizier) | Synthesizes all perspectives into a verdict | Runs last, sees everything |
+
+Each advisor is a standalone markdown file in `personas/`. Drop a new `.md` file in that directory and Divan auto-discovers it.
+
+---
+
+## Install
+
+Requires Python 3.11+.
+
+```bash
+git clone https://github.com/alpgcesur/7-Divan.git
+cd 7-Divan
+uv sync
+```
+
+Copy the example env file and add at least one API key:
+
+```bash
+cp .env.example .env
+# Edit .env with your keys
+```
+
+Supported providers: Anthropic, OpenAI, Google (Gemini).
+
+---
+
+## Usage
+
+### Interactive (recommended)
+
+Just run it. The TUI walks you through everything: question, session, advisors, models, debate rounds.
+
+```bash
+uv run divan
+```
+
+### With flags
+
+```bash
+# Direct question
+uv run divan "Should I build X?"
+
+# Pipe from stdin
+echo "Should I build X?" | uv run divan
+
+# Pick specific advisors
+uv run divan "Should I build X?" --advisors contrarian,operator
+
+# Multiple debate rounds
+uv run divan "Should I build X?" --rounds 2
+
+# Skip clarifying questions
+uv run divan "Should I build X?" --no-context
+
+# Save polished decision brief
+uv run divan "Should I build X?" -o brief.md
+
+# Continue a previous session
+uv run divan -c
+
+# List available personas
+uv run divan --list
+
+# List past sessions
+uv run divan --history
+```
+
+---
+
+## How It Works
+
+```mermaid
+graph LR
+    Q[Your Question] --> CG[Context Gathering]
+    CG --> |clarifying Q&A| R1
+
+    subgraph R1[Round 1]
+        A1[⚔️ Contrarian]
+        A2[⚙️ Operator]
+        A3[🔭 Visionary]
+        A4[👤 Customer]
+    end
+
+    R1 --> S1[👁 Bas Vezir Synthesis]
+
+    S1 --> |if rounds > 1| R2
+
+    subgraph R2[Round 2]
+        B1[⚔️ Contrarian]
+        B2[⚙️ Operator]
+        B3[🔭 Visionary]
+        B4[👤 Customer]
+    end
+
+    R2 --> S2[👁 Bas Vezir Synthesis]
+    S2 --> OUT[Decision Brief]
+    S1 --> |if rounds = 1| OUT
+```
+
+**Key design decisions:**
+
+- **Parallel, not sequential.** All advisors stream simultaneously in every round.
+- **Advisors are isolated.** Each advisor sees only the question and their own prior responses. No groupthink. Tension surfaces through Bas Vezir's framing.
+- **Debate rounds.** In round 2+, each advisor also sees Bas Vezir's previous synthesis, so they can respond to the overall picture without seeing each other directly.
+- **Context gathering.** Before deliberation, an LLM generates 2-3 clarifying questions. Your answers become structured context that all advisors receive.
+- **Streaming is mandatory.** The watching-them-think experience is core to how Divan feels.
+- **Sessions persist.** Every deliberation is saved as JSONL in `.divan/sessions/`. Continue any session with `-c` or `--session <id>`.
+
+---
+
+## Export Format
+
+`-o brief.md` produces a polished decision brief:
+
+```markdown
+# Divan Deliberation
+
+> Should I leave consulting to build a startup?
+
+**Date:** 2026-02-23  |  **Session:** 8d8f165a  |  **Rounds:** 2
+**Advisor model:** openai:gpt-5-mini  |  **Synthesis:** openai:gpt-5.1
+
+---
+
+## Round 1
+
+### ⚔️ The Contrarian (Muhalif)
+[response]
+
+### ⚙️ The Operator (Sadrazam)
+[response]
+
+...
+
+### 👁 Bas Vezir (Grand Vizier)
+[synthesis]
+
+---
+
+## Round 2
+[same structure, with evolved positions]
+```
+
+Single-round sessions omit the round headers for a cleaner read.
+
+---
+
+## Configuration
+
+All settings can be set via `.env` file with `DIVAN_` prefix, or through the TUI:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `DIVAN_ADVISOR_MODEL` | `openai:gpt-5-mini-2025-08-07` | Model for advisor deliberations |
+| `DIVAN_SYNTHESIS_MODEL` | `openai:gpt-5.1-2025-11-13` | Model for Bas Vezir synthesis |
+| `DIVAN_MAX_TOKENS` | `1500` | Max tokens per advisor response |
+| `DIVAN_SYNTHESIS_MAX_TOKENS` | `2000` | Max tokens for synthesis |
+
+Model format is `provider:model_name`. Supported providers: `anthropic`, `openai`, `google_genai`.
+
+---
+
+## Project Structure
+
+```
+divan/
+  cli.py          CLI entry point (Click)
+  tui.py          Interactive setup (InquirerPy + Rich)
+  display.py      Streaming display layer (Rich Live)
+  context.py      Pre-deliberation clarifying questions
+  advisor.py      Persona loader
+  synthesis.py    Bas Vezir prompt builder
+  session.py      Session persistence (JSONL)
+  export.py       Polished markdown export
+  config.py       Settings (pydantic-settings)
+  models.py       Provider-agnostic model factory
+  engine.py       LangGraph deliberation graph
+
+personas/
+  contrarian.md   ⚔️  The Contrarian
+  operator.md     ⚙️  The Operator
+  visionary.md    🔭  The Visionary
+  customer.md     👤  The Customer
+  bas_vezir.md    👁  Bas Vezir
+```
+
+---
+
+## Adding Custom Advisors
+
+Create a markdown file in `personas/` with YAML frontmatter:
+
+```markdown
+---
+name: The Economist
+title: Iktisat Naziri
+icon: "\U0001F4CA"
+color: cyan
+order: 5
+---
+
+You are an economist advisor. You evaluate every decision through the lens of
+incentives, opportunity costs, and market dynamics.
+
+Your signature question: "What are the economic incentives at play here?"
+```
+
+Divan auto-discovers it on the next run. Set `order` to control display position.
+
+---
+
+## Development
+
+```bash
+# Run tests
+uv run pytest tests/ -v
+
+# Run the CLI directly
+uv run divan
+```
+
+---
+
+## Tech Stack
+
+- **Python 3.11+** with async throughout
+- **LangGraph** for parallel fan-out/fan-in orchestration
+- **LangChain** with `init_chat_model()` for provider-agnostic model creation
+- **Rich** for terminal UI (panels, live streaming, markdown rendering)
+- **InquirerPy** for interactive prompts
+- **Click** for CLI argument parsing
+- **Pydantic Settings** for configuration
